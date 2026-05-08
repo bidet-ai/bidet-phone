@@ -361,8 +361,8 @@ class BidetModelProviderImpl @Inject constructor(
 }
 
 /**
- * Bidet-download DataStore. Lives in its own file so it doesn't share the bidet/* tab-cache
- * DataStore. One file per app process.
+ * Bidet-download DataStore. Lives in its own file so it doesn't share the `bidet` tab-cache
+ * DataStore (defined in BidetTabsViewModel). One file per app process.
  */
 private val Context.bidetDownloadDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "bidet_download",
