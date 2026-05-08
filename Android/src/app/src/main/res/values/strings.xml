@@ -1,5 +1,6 @@
 <!--
  Copyright 2025 Google LLC
+ Modifications Copyright 2026 bidet-ai contributors. Changed: add bidet_* string resources for the brain-dump capture UI.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,6 +16,37 @@
 -->
 
 <resources>
+  <!-- bidet-ai strings (added 2026-05-07). User-visible copy. Pinned for v0.1; do
+       not introduce clinical terms or school-context references (banWordCheck enforces). -->
+  <string name="bidet_app_name" translatable="false">Bidet AI</string>
+  <string name="bidet_recording_channel_name" translatable="false">Recording</string>
+  <string name="bidet_recording_channel_desc" translatable="false">Persistent notification while a brain-dump is being captured.</string>
+  <string name="bidet_recording_notification_title" translatable="false">Bidet AI is recording</string>
+  <string name="bidet_recording_notification_text" translatable="false">Tap the app to view the live transcript. The microphone is active.</string>
+  <string name="bidet_recording_stop_action" translatable="false">Stop</string>
+  <string name="bidet_tab_raw" translatable="false">RAW</string>
+  <string name="bidet_tab_clean" translatable="false">CLEAN</string>
+  <string name="bidet_tab_analysis" translatable="false">ANALYSIS</string>
+  <string name="bidet_tab_forai" translatable="false">FORAI</string>
+  <string name="bidet_record_button" translatable="false">Record</string>
+  <string name="bidet_stop_button" translatable="false">Stop</string>
+  <string name="bidet_generate_button" translatable="false">Generate</string>
+  <string name="bidet_consent_title" translatable="false">About Gemma 4</string>
+  <string name="bidet_consent_body" translatable="false">This app uses Google\'s Gemma 4 model running locally on your device. By continuing, you agree to the Gemma Terms of Use and Prohibited Use Policy.</string>
+  <string name="bidet_consent_terms_link" translatable="false">https://ai.google.dev/gemma/terms</string>
+  <string name="bidet_consent_terms_label" translatable="false">View Gemma Terms of Use</string>
+  <string name="bidet_consent_pup_link" translatable="false">https://ai.google.dev/gemma/prohibited_use_policy</string>
+  <string name="bidet_consent_pup_label" translatable="false">View Prohibited Use Policy</string>
+  <string name="bidet_consent_decline" translatable="false">Decline</string>
+  <string name="bidet_consent_accept" translatable="false">Accept &amp; Download</string>
+  <string name="bidet_settings_title" translatable="false">Bidet Settings</string>
+  <string name="bidet_settings_prompt_section" translatable="false">Prompt templates (debug)</string>
+  <string name="bidet_settings_webhook_section" translatable="false">TP3 webhook (debug)</string>
+  <string name="bidet_settings_webhook_url_label" translatable="false">Webhook URL</string>
+  <string name="bidet_settings_webhook_key_label" translatable="false">X-AG-KEY</string>
+  <string name="bidet_settings_send_to_tp3" translatable="false">Send to TP3</string>
+  <string name="bidet_chunks_behind" translatable="false">Transcription behind by %1$d chunks</string>
+  <string name="bidet_chunk_failure_marker" translatable="false">[chunk %1$d transcription failed]</string>
   <!-- TODO(jingjin): Add translation support when i18n is ready. -->
   <string name="about_this_update" translatable="false">About this update</string>
   <string name="all" translatable="false">All</string>

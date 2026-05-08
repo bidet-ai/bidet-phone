@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Google LLC
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,32 +29,55 @@ plugins {
   kotlin("kapt")
 }
 
+// bidet-ai: banWordCheck — fails the build if banned tokens leak into user-visible code paths.
+// Implementation lives in $rootDir/gradle/ban-word-check.gradle.kts.
+apply(from = "$rootDir/gradle/ban-word-check.gradle.kts")
+
 android {
   namespace = "com.google.ai.edge.gallery"
   compileSdk = 35
 
   defaultConfig {
-    applicationId = "com.google.aiedge.gallery"
+    // bidet-ai: rebrand from upstream Gallery → Bidet AI for Android.
+    applicationId = "ai.bidet.phone"
     minSdk = 31
     targetSdk = 35
-    versionCode = 30
-    versionName = "1.0.13"
+    versionCode = 1
+    versionName = "0.1.0"
 
-    // Needed for HuggingFace auth workflows.
-    // Use the scheme of the "Redirect URLs" in HuggingFace app.
-    manifestPlaceholders["appAuthRedirectScheme"] =
-        "REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP"
+    // bidet-ai: HuggingFace OAuth stripped — Gemma 4 E4B LiteRT-LM artifact is public/ungated.
+    // (The appAuthRedirectScheme manifestPlaceholder was removed; openid-appauth dep also
+    // removed in libs.versions.toml.)
     manifestPlaceholders["applicationName"] = "com.google.ai.edge.gallery.GalleryApplication"
     manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
+  // bidet-ai: release signingConfig populated from CI env vars (GitHub Secrets workflow
+  // base64-decodes RELEASE_KEYSTORE_B64 → RELEASE_KEYSTORE_PATH then exports the
+  // password/alias env vars). Locally, if the env vars are unset, we silently fall through to
+  // debug signing so a developer's `assembleRelease` does not require the production keystore.
+  signingConfigs {
+    create("release") {
+      val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+      if (!keystorePath.isNullOrBlank()) {
+        storeFile = file(keystorePath)
+        storePassword = System.getenv("RELEASE_KEYSTORE_PASS")
+        keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+        keyPassword = System.getenv("RELEASE_KEY_PASS")
+      }
+    }
+  }
+
   buildTypes {
     release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig =
+          if (!System.getenv("RELEASE_KEYSTORE_PATH").isNullOrBlank())
+              signingConfigs.getByName("release")
+          else signingConfigs.getByName("debug")
     }
   }
   compileOptions {
@@ -85,8 +109,10 @@ dependencies {
   implementation(libs.material.icon.extended)
   implementation(libs.androidx.work.runtime)
   implementation(libs.androidx.datastore)
+  implementation(libs.androidx.datastore.preferences)
   implementation(libs.com.google.code.gson)
   implementation(libs.androidx.lifecycle.process)
+  implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.security.crypto)
   implementation(libs.androidx.webkit)
   implementation(libs.litertlm)
@@ -99,7 +125,7 @@ dependencies {
   implementation(libs.camerax.camera2)
   implementation(libs.camerax.lifecycle)
   implementation(libs.camerax.view)
-  implementation(libs.openid.appauth)
+  // bidet-ai: openid-appauth removed (Gemma 4 E4B is public/ungated).
   implementation(libs.androidx.splashscreen)
   implementation(libs.protobuf.javalite)
   implementation(libs.hilt.android)
@@ -110,8 +136,14 @@ dependencies {
   implementation(libs.firebase.messaging)
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
+  // bidet-ai: Whisper.cpp Android JNI bindings for ASR.
+  // Choice rationale: see UPSTREAM_WHISPER.md (whisper-jni 1.7.1, official ggml-tiny.en model).
+  implementation(libs.whisper.jni)
+  // bidet-ai: OkHttp for the optional debug Tp3Sender webhook POST.
+  implementation(libs.okhttp)
   kapt(libs.hilt.android.compiler)
   testImplementation(libs.junit)
+  testImplementation(libs.kotlinx.coroutines.test)
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.espresso.core)
   androidTestImplementation(platform(libs.androidx.compose.bom))

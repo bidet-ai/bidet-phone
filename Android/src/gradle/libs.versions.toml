@@ -1,3 +1,7 @@
+# Modifications Copyright 2026 bidet-ai contributors. Changed: drop netOpenidAppauth (HF OAuth
+# stripped), pin litertlm ≥0.10.1 (currently 0.11.0 — keep), add whisper-jni for ASR, add
+# okhttp for the optional debug Tp3Sender webhook, add datastore-preferences + lifecycle-runtime-
+# compose + kotlinx-coroutines-test for the bidet/* code and tests.
 [versions]
 agp = "8.8.2"
 kotlin = "2.2.0"
@@ -6,6 +10,7 @@ junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 lifecycleRuntimeKtx = "2.8.7"
+lifecycleRuntimeCompose = "2.8.7"
 activityCompose = "1.10.1"
 composeBom = "2026.02.00"
 navigation = "2.8.9"
@@ -19,6 +24,8 @@ lifecycleProcess = "2.8.7"
 webkit = "1.14.0"
 protobuf = "0.9.5"
 protobufJavaLite = "4.26.1"
+# bidet-ai pin: LiteRT-LM ≥0.10.1 required to avoid Pixel 8 Pro GPU decode crash
+# (LiteRT-LM#1850). Upstream Gallery is on 0.11.0 — satisfies pin.
 #noinspection GradleDependency
 litertlm = "0.11.0"
 commonmark = "1.0.0-alpha02"
@@ -26,7 +33,6 @@ richtext = "1.0.0-alpha02"
 playServicesTfliteJava = "16.4.0"
 playServicesTfliteGpu= "16.4.0"
 cameraX = "1.4.2"
-netOpenidAppauth = "0.11.1"
 splashscreen = "1.2.0-beta01"
 hilt = "2.57.2"
 hiltNavigation = "1.3.0"
@@ -40,6 +46,10 @@ kotlinReflect = "2.2.21"
 moshi = "1.15.2"
 ksp = "2.3.6"
 mlkit-genai-prompt = "1.0.0-beta2"  # Ref: https://developers.google.com/ml-kit/genai/prompt/android/get-started#configure-project
+# bidet-ai dependencies
+whisperJni = "1.7.1"
+okhttp = "4.12.0"
+kotlinxCoroutinesTest = "1.8.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -63,6 +73,8 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 material-icon-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconExtended" }
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workRuntime" }
 androidx-datastore = { group = "androidx.datastore", name = "datastore", version.ref = "dataStore" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "dataStore" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeCompose" }
 com-google-code-gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycleProcess" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit"}
@@ -76,7 +88,6 @@ camerax-core = { group = "androidx.camera", name = "camera-core", version.ref = 
 camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX"}
 camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX"}
 camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX"}
-openid-appauth = { group = "net.openid", name = "appauth", version.ref = "netOpenidAppauth" }
 androidx-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splashscreen" }
 protobuf-javalite = { group = "com.google.protobuf", name = "protobuf-javalite", version.ref = "protobufJavaLite" }
 hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
@@ -93,6 +104,10 @@ androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterfa
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshi" }
 moshi-kotlin-codegen = { group = "com.squareup.moshi", name = "moshi-kotlin-codegen", version.ref = "moshi" }
 mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkit-genai-prompt" }
+# bidet-ai libraries
+whisper-jni = { group = "io.github.givimad", name = "whisper-jni", version.ref = "whisperJni" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
