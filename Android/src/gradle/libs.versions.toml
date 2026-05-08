@@ -60,6 +60,12 @@ kotlinxCoroutinesTest = "1.8.1"
 # bidet-ai Phase 4A: Room for session persistence (sessions list + detail).
 # Pinned to a release that supports KSP + Kotlin 2.2 (we already use ksp for moshi-kotlin-codegen).
 room = "2.7.0"
+# bidet-ai Phase 4A.1: androidx.documentfile is referenced by upstream Gallery's
+# customtasks/agentchat/SkillManagerViewModel.kt (DocumentFile.fromTreeUri etc.). It used
+# to resolve transitively through firebase-* artifacts; once we stripped those (#1) the
+# import broke at compile time. Phase 2 plans to remove the customtasks/agentchat tree
+# entirely; until then we wire the explicit dep so the build stays green.
+documentFile = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -121,6 +127,10 @@ kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+# bidet-ai Phase 4A.1: explicit dep restoring an androidx artifact previously pulled in
+# transitively by firebase. Consumed only by upstream Gallery's
+# customtasks/agentchat/SkillManagerViewModel.kt (slated for removal in Phase 2).
+androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentFile" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
