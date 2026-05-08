@@ -45,9 +45,12 @@ android {
     versionCode = 1
     versionName = "0.1.0"
 
-    // bidet-ai: HuggingFace OAuth stripped — Gemma 4 E4B LiteRT-LM artifact is public/ungated.
-    // (The appAuthRedirectScheme manifestPlaceholder was removed; openid-appauth dep also
-    // removed in libs.versions.toml.)
+    // bidet-ai: HuggingFace OAuth dep RESTORED 2026-05-08 (was stripped per brief, but
+    // upstream Gallery's model-picker code references it). Phase 2 will strip the
+    // consuming code along with the model picker; for now we keep both the dep and the
+    // redirect-scheme placeholder so AndroidManifest compiles.
+    manifestPlaceholders["appAuthRedirectScheme"] =
+        "ai.bidet.phone.placeholder"
     manifestPlaceholders["applicationName"] = "com.google.ai.edge.gallery.GalleryApplication"
     manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
 
@@ -114,6 +117,12 @@ dependencies {
   implementation(libs.androidx.lifecycle.process)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.security.crypto)
+  // Restored 2026-05-08: brief stripped these but upstream Gallery's
+  // ProjectConfig.kt + ModelManagerViewModel.kt + DownloadAndTryButton.kt
+  // still reference them. Phase 2 strips the consuming code; for now keep
+  // the deps so the build compiles.
+  implementation(libs.openid.appauth)
+  implementation(libs.androidx.browser)
   implementation(libs.androidx.webkit)
   implementation(libs.litertlm)
   implementation(libs.commonmark)

@@ -42,6 +42,12 @@ googleService = "4.4.3"
 firebaseBom = "33.16.0"
 exifinterface = "1.4.1"
 securityCrypto = "1.1.0"
+# Restored 2026-05-08: brief stripped these but upstream Gallery's ProjectConfig.kt,
+# ModelManagerViewModel.kt, and DownloadAndTryButton.kt still reference them.
+# Phase 2 strips the consuming code (model picker + download path); for now keep
+# the deps so the build compiles.
+netOpenidAppauth = "0.11.1"
+androidxBrowser = "1.8.0"
 kotlinReflect = "2.2.21"
 moshi = "1.15.2"
 ksp = "2.3.6"
@@ -60,6 +66,8 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "androidxBrowser" }
+openid-appauth = { group = "net.openid", name = "appauth", version.ref = "netOpenidAppauth" }
 androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }

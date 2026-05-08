@@ -189,7 +189,8 @@ class RecordingService : Service() {
                     stopPi,
                 ).build()
             )
-            .setStyle(androidx.media.app.NotificationCompat.MediaStyle())
+            // MediaStyle omitted intentionally; would need an extra
+            // androidx.media:media dep for a cosmetic chrome change. Phase 2.
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
