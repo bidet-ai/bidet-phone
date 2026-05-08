@@ -16,13 +16,12 @@
 
 package com.google.ai.edge.gallery.bidet.di
 
+import com.google.ai.edge.gallery.bidet.download.BidetModelProvider
+import com.google.ai.edge.gallery.bidet.download.BidetModelProviderImpl
 import com.google.ai.edge.gallery.bidet.ui.BidetGemmaClient
-import com.google.ai.edge.gallery.bidet.ui.BidetModelProvider
 import com.google.ai.edge.gallery.bidet.ui.LiteRtBidetGemmaClient
-import com.google.ai.edge.gallery.data.Model
 import dagger.Binds
 import dagger.Module
-import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
@@ -31,11 +30,12 @@ import javax.inject.Singleton
  * Hilt graph for the bidet brain-dump pipeline.
  *
  * Bindings:
- *  - [BidetGemmaClient] → [LiteRtBidetGemmaClient] (Singleton). Used by [BidetTabsViewModel] to
- *    drive on-demand CLEAN / ANALYSIS / FORAI generation.
- *  - [BidetModelProvider] → a Phase 2 stub that returns null (no model wired through the bidet
- *    flow yet). Phase 3 will replace this with a real provider that surfaces the
- *    auto-downloaded Gemma 4 E4B instance to the client.
+ *  - [BidetGemmaClient] → [LiteRtBidetGemmaClient] (Singleton). Used by
+ *    [com.google.ai.edge.gallery.bidet.ui.BidetTabsViewModel] to drive on-demand
+ *    CLEAN / ANALYSIS / FORAI generation.
+ *  - [BidetModelProvider] → [BidetModelProviderImpl] (Singleton). Phase 3 wires the real
+ *    on-device download flow against the HuggingFace `litert-community/gemma-4-E4B-it-litert-lm`
+ *    URL via upstream Gallery's [com.google.ai.edge.gallery.worker.DownloadWorker].
  *
  * Why a separate module: the Gallery [com.google.ai.edge.gallery.di.AppModule] is upstream
  * Apache 2.0 territory we shouldn't churn. Bidet's bindings live in this leaf module so the
@@ -49,17 +49,7 @@ abstract class BidetModule {
     @Singleton
     abstract fun bindBidetGemmaClient(impl: LiteRtBidetGemmaClient): BidetGemmaClient
 
-    companion object {
-        /**
-         * Phase 2 stub provider. Returns null until the bidet flow owns model selection
-         * (Phase 3). When null is returned, [LiteRtBidetGemmaClient.runInference] throws
-         * [com.google.ai.edge.gallery.bidet.ui.BidetModelNotReadyException], which the tab UI
-         * surfaces as a Failed state.
-         */
-        @Provides
-        @Singleton
-        fun provideBidetModelProvider(): BidetModelProvider = object : BidetModelProvider {
-            override fun getReadyModel(): Model? = null
-        }
-    }
+    @Binds
+    @Singleton
+    abstract fun bindBidetModelProvider(impl: BidetModelProviderImpl): BidetModelProvider
 }

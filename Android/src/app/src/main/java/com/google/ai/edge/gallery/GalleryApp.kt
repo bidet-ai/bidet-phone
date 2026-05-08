@@ -1,6 +1,6 @@
 /*
  * Copyright 2025 Google LLC
- * Modifications Copyright 2026 bidet-ai contributors. Changed: replace GalleryNavHost entry with BidetMainScreen — Phase 2 wires the four-tab brain-dump UX as the app's start destination.
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: replace GalleryNavHost entry with BidetMainScreen — Phase 2 wires the four-tab brain-dump UX as the app's start destination. Phase 3 injects BidetModelProvider via Hilt entry-point so the consent → download → tabs gate runs on first launch.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,16 +17,25 @@
 
 package com.google.ai.edge.gallery
 
+import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import com.google.ai.edge.gallery.bidet.download.BidetModelProvider
 import com.google.ai.edge.gallery.bidet.ui.BidetMainScreen
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 
 /**
  * Top level composable representing the main screen of the application.
  *
- * Phase 2: bidet-phone routes directly to [BidetMainScreen], replacing the upstream Gallery
- * task picker / nav graph entry. The legacy GalleryNavHost / HomeScreen / model picker are
- * deferred — the contest brief locks bidet-phone to a single brain-dump UX.
+ * Phase 3: bidet-phone routes directly to [BidetMainScreen]. The
+ * [BidetModelProvider] is fetched out of the SingletonComponent so the screen can run its
+ * first-run consent + download gate without yet another @AndroidEntryPoint at the
+ * MainActivity boundary (we leave MainActivity unchanged from upstream Gallery to keep that
+ * file diffable against future merges).
  *
  * The [modelManagerViewModel] parameter is retained for binary compatibility with
  * [MainActivity]'s call site (and so the upstream model-download lifecycle observers in
@@ -37,5 +46,18 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 @Suppress("UNUSED_PARAMETER")
 @Composable
 fun GalleryApp(modelManagerViewModel: ModelManagerViewModel) {
-    BidetMainScreen()
+    val context = LocalContext.current
+    val provider = bidetModelProviderOf(context)
+    BidetMainScreen(modelProvider = provider)
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+internal interface BidetEntryPoint {
+    fun bidetModelProvider(): BidetModelProvider
+}
+
+private fun bidetModelProviderOf(context: Context): BidetModelProvider {
+    val app = context.applicationContext
+    return EntryPointAccessors.fromApplication(app, BidetEntryPoint::class.java).bidetModelProvider()
 }

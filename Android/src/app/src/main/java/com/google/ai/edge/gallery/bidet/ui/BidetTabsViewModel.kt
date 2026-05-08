@@ -28,8 +28,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -83,6 +87,15 @@ class BidetTabsViewModel @Inject constructor(
     private val _foraiState = MutableStateFlow<TabState>(TabState.Idle)
     val foraiState: StateFlow<TabState> = _foraiState.asStateFlow()
 
+    /**
+     * One-shot signal: emitted when a tab generation throws [BidetModelNotReadyException].
+     * The host screen ([BidetMainScreen]) collects this and routes the user back to
+     * [GemmaDownloadScreen]. Buffered so an emission while the host is composing isn't lost.
+     */
+    private val _modelMissingSignal =
+        MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val modelMissingSignal: SharedFlow<Unit> = _modelMissingSignal.asSharedFlow()
+
     /** Trigger CLEAN generation for the current RAW. Caches result by SHA-256 key. */
     fun generateClean(temperature: Float = DEFAULT_TEMPERATURE) {
         generate(TAB_CLEAN, _cleanState, ASSET_CLEAN, PROMPT_VERSION_CLEAN, temperature)
@@ -132,6 +145,9 @@ class BidetTabsViewModel @Inject constructor(
                 target.value = TabState.Cached(result, now)
             } catch (t: Throwable) {
                 target.value = TabState.Failed(t.message ?: "Generation failed")
+                if (t is BidetModelNotReadyException) {
+                    _modelMissingSignal.tryEmit(Unit)
+                }
             }
         }
     }
