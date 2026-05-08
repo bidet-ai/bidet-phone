@@ -153,6 +153,10 @@ dependencies {
   kapt(libs.hilt.android.compiler)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
+  // bidet-ai 2026-05-08: real org.json for unit tests. Android stub's JSONObject
+  // throws "Method not mocked" RuntimeException in JVM unit-test runtime;
+  // DedupAlgorithmTest fixtures parse JSON, so we need the real artifact.
+  testImplementation("org.json:json:20240303")
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.espresso.core)
   androidTestImplementation(platform(libs.androidx.compose.bom))
