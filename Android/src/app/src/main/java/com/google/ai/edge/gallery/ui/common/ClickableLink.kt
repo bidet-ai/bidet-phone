@@ -16,7 +16,6 @@
 
 package com.google.ai.edge.gallery.ui.common
 
-import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -38,7 +37,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
-import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.ai.edge.gallery.ui.theme.customColors
 
 @Composable
@@ -57,13 +55,7 @@ fun buildTrackableUrlAnnotatedString(url: String, linkText: String): AnnotatedSt
                   textDecoration = TextDecoration.Underline,
                 )
             ),
-          linkInteractionListener = {
-            uriHandler.openUri(url)
-            firebaseAnalytics?.logEvent(
-              "resource_link_click",
-              Bundle().apply { putString("link_destination", url) },
-            )
-          },
+          linkInteractionListener = { uriHandler.openUri(url) },
         )
     ) {
       append(linkText)

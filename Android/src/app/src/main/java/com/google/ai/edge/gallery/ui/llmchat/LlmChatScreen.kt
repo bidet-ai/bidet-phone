@@ -19,8 +19,6 @@ package com.google.ai.edge.gallery.ui.llmchat
 import androidx.hilt.navigation.compose.hiltViewModel
 
 import android.graphics.Bitmap
-import android.os.Bundle
-import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,14 +33,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelCapability
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
-import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageImage
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
@@ -52,8 +48,6 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
 import com.google.ai.edge.litertlm.Contents
-
-private const val TAG = "AGLlmChatScreen"
 
 @Composable
 fun LlmChatScreen(
@@ -256,25 +250,6 @@ fun ChatViewWrapper(
             )
           },
           allowThinking = task.allowCapability(ModelCapability.LLM_THINKING, model),
-        )
-
-        val activeSkills = getActiveSkills()
-        Log.d(
-          TAG,
-          "Analytics: generate_action, capability_name=${task.id}, active_skills=${activeSkills.joinToString(",")}",
-        )
-        firebaseAnalytics?.logEvent(
-          GalleryEvent.GENERATE_ACTION.id,
-          Bundle().apply {
-            putString("capability_name", task.id)
-            putString("model_id", model.name)
-            putBoolean("has_image", images.isNotEmpty())
-            putInt("image_count", images.size)
-            putBoolean("has_audio", audioMessages.isNotEmpty())
-            putInt("audio_count", audioMessages.size)
-            putInt("active_skills_count", activeSkills.size)
-            putString("active_skills_list", activeSkills.joinToString(","))
-          },
         )
       }
     },
