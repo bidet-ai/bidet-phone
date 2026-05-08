@@ -16,12 +16,14 @@
 
 package com.google.ai.edge.gallery.bidet.service
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -31,6 +33,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.google.ai.edge.gallery.MainActivity
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine
@@ -141,6 +144,20 @@ class RecordingService : Service() {
     /** Begin a new recording session. Safe to call when already recording (no-op). */
     fun startRecording() {
         if (pipeline != null) return
+
+        // Phase 4A.1: gate on RECORD_AUDIO. The launcher UI also requests this permission via
+        // rememberLauncherForActivityResult, but the user can revoke from Settings while
+        // the service is alive (or before a recovery start after process death). Without
+        // this guard the AudioRecord ctor would silently fail, the aggregator would never
+        // emit, and the session row would stay with `endedAtMs=null` forever.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "RECORD_AUDIO not granted — refusing to start recording.")
+            handlePermissionDenied()
+            return
+        }
+
         startForegroundCompat()
         if (!requestAudioFocus()) {
             Log.w(TAG, "Audio focus denied — proceeding anyway.")
@@ -265,6 +282,36 @@ class RecordingService : Service() {
             // ignore
         }
         stopSelf()
+    }
+
+    /**
+     * Phase 4A.1: when [startRecording] is invoked without RECORD_AUDIO, we still want a
+     * record of the attempt in the sessions list (so the user understands why nothing
+     * appears) and we want the service to clean itself up. We don't call startForeground
+     * here — without RECORD_AUDIO Android won't let a microphone-type FGS run anyway.
+     */
+    private fun handlePermissionDenied() {
+        val sessionId = java.util.UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        scope.launch {
+            try {
+                sessionDao.insert(
+                    BidetSession(
+                        sessionId = sessionId,
+                        startedAtMs = now,
+                        endedAtMs = now,
+                        durationSeconds = 0,
+                        rawText = "",
+                        chunkCount = 0,
+                        notes = "permission_denied",
+                    )
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to insert permission_denied row: ${t.message}", t)
+            } finally {
+                withContext(Dispatchers.Main) { stopSelf() }
+            }
+        }
     }
 
     /**

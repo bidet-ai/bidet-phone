@@ -50,10 +50,17 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.google.ai.edge.gallery.bidet.consent.GemmaTermsConsentScreen
 import com.google.ai.edge.gallery.bidet.consent.hasGemmaConsent
 import com.google.ai.edge.gallery.bidet.consent.recordGemmaConsent
+import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.download.BidetModelProvider
 import com.google.ai.edge.gallery.bidet.service.RecordingService
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Top-level Bidet screen. Owns:
@@ -77,6 +84,15 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
     var phase by remember { mutableStateOf<Phase>(Phase.Loading) }
 
     LaunchedEffect(Unit) {
+        // Phase 4A.1: orphan recovery sweep. Backfills endedAtMs on rows whose recording
+        // service died before finalize ran (process kill, mid-record OOM, mic permission
+        // revoked while running). Cheap one-shot UPDATE; only touches rows where
+        // endedAtMs IS NULL.
+        runCatching {
+            withContext(Dispatchers.IO) {
+                BidetMainScreenHiltEntryPoint.dao(context).recoverOrphans()
+            }
+        }
         val consented = hasGemmaConsent(context)
         phase = when {
             !consented -> Phase.NeedsConsent
@@ -147,6 +163,25 @@ private sealed class Phase {
     object NeedsConsent : Phase()
     object NeedsDownload : Phase()
     object Ready : Phase()
+}
+
+/**
+ * Phase 4A.1: app-launch orphan-recovery sweep needs the [BidetSessionDao]. Top-level
+ * `BidetMainScreen` doesn't have an injected ViewModel that exposes the DAO, so we reach
+ * for it via a Hilt EntryPoint rather than introducing a new VM just for a one-shot.
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+internal interface BidetMainScreenDaoEntryPoint {
+    fun bidetSessionDao(): BidetSessionDao
+}
+
+internal object BidetMainScreenHiltEntryPoint {
+    fun dao(context: Context): BidetSessionDao =
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            BidetMainScreenDaoEntryPoint::class.java,
+        ).bidetSessionDao()
 }
 
 /**
