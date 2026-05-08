@@ -29,6 +29,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 import com.google.ai.edge.gallery.data.KEY_MODEL_COMMIT_HASH
 import com.google.ai.edge.gallery.data.KEY_MODEL_DOWNLOAD_ERROR_MESSAGE
 import com.google.ai.edge.gallery.data.KEY_MODEL_DOWNLOAD_FILE_NAME
@@ -47,13 +48,12 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -170,7 +170,15 @@ class BidetModelProviderImpl @Inject constructor(
         return File(base, listOf(MODEL_DIR, VERSION, FILE_NAME).joinToString(File.separator))
     }
 
-    override fun startDownload(): Flow<DownloadProgress> = callbackFlow {
+    /**
+     * Phase 4A.1: was implemented with [WorkManager.getWorkInfoByIdLiveData] +
+     * `liveData.observeForever(...)` inside a `callbackFlow`. `observeForever` throws
+     * `IllegalStateException` when invoked off the main thread; any caller collecting on
+     * `Dispatchers.IO` would crash the app the moment the user tapped Start. Switched to
+     * [WorkManager.getWorkInfoByIdFlow], which is safe on any dispatcher and completes
+     * naturally when the work reaches a terminal state (Succeeded / Failed / Cancelled).
+     */
+    override fun startDownload(): Flow<DownloadProgress> {
         // Snapshot the best-known total now so all observer paths agree. The HEAD-fetch may
         // refine this in [fetchExpectedTotalBytes]; any value the screen has fed through us
         // wins over the fallback.
@@ -195,71 +203,68 @@ class BidetModelProviderImpl @Inject constructor(
         val workerId: UUID = request.id
         workManager.enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, request)
 
-        val liveData = workManager.getWorkInfoByIdLiveData(workerId)
-        val observer = androidx.lifecycle.Observer<WorkInfo?> { info ->
-            if (info == null) return@Observer
-            when (info.state) {
-                WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> {
-                    val current = _progress.value
-                    if (current !is DownloadProgress.InProgress) {
-                        _progress.value = DownloadProgress.InProgress(
+        // [transformWhile] lets us emit on each WorkInfo update AND complete the flow when we
+        // observe a terminal state, keeping the Cold Flow contract.
+        return workManager
+            .getWorkInfoByIdFlow(workerId)
+            .transformWhile { info ->
+                if (info == null) {
+                    // WorkManager occasionally yields a transient null between enqueue +
+                    // first state read; swallow it but keep the flow alive.
+                    return@transformWhile true
+                }
+                val nextProgress: DownloadProgress = when (info.state) {
+                    WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> {
+                        val current = _progress.value
+                        if (current is DownloadProgress.InProgress) current
+                        else DownloadProgress.InProgress(
                             percent = 0,
                             bytesDownloaded = 0L,
                             totalBytes = totalBytes,
                             bytesPerSec = 0L,
                         )
-                        trySend(_progress.value)
                     }
-                }
-                WorkInfo.State.RUNNING -> {
-                    val downloaded = info.progress.getLong(KEY_MODEL_DOWNLOAD_RECEIVED_BYTES, 0L)
-                    val rate = info.progress.getLong(KEY_MODEL_DOWNLOAD_RATE, 0L)
-                    val total = if (totalBytes > 0) totalBytes else 1L
-                    val percent = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
-                    _progress.value = DownloadProgress.InProgress(
-                        percent = percent,
-                        bytesDownloaded = downloaded,
-                        totalBytes = totalBytes,
-                        bytesPerSec = rate,
-                    )
-                    trySend(_progress.value)
-                }
-                WorkInfo.State.SUCCEEDED -> {
-                    if (isModelReady()) {
-                        _progress.value = DownloadProgress.Success
-                    } else {
-                        // Worker reported success but the file isn't where we expect — surface
-                        // as failure so the user can retry.
-                        _progress.value = DownloadProgress.Failed(
-                            "Download finished but model file was not found at " +
-                                "${getModelPath()?.absolutePath}"
+                    WorkInfo.State.RUNNING -> {
+                        val downloaded = info.progress.getLong(KEY_MODEL_DOWNLOAD_RECEIVED_BYTES, 0L)
+                        val rate = info.progress.getLong(KEY_MODEL_DOWNLOAD_RATE, 0L)
+                        val total = if (totalBytes > 0) totalBytes else 1L
+                        val percent = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
+                        DownloadProgress.InProgress(
+                            percent = percent,
+                            bytesDownloaded = downloaded,
+                            totalBytes = totalBytes,
+                            bytesPerSec = rate,
                         )
                     }
-                    trySend(_progress.value)
-                    close()
+                    WorkInfo.State.SUCCEEDED -> {
+                        if (isModelReady()) {
+                            DownloadProgress.Success
+                        } else {
+                            DownloadProgress.Failed(
+                                "Download finished but model file was not found at " +
+                                    "${getModelPath()?.absolutePath}"
+                            )
+                        }
+                    }
+                    WorkInfo.State.FAILED -> {
+                        val err = info.outputData.getString(KEY_MODEL_DOWNLOAD_ERROR_MESSAGE)
+                            ?: "Download failed"
+                        DownloadProgress.Failed(err)
+                    }
+                    WorkInfo.State.CANCELLED -> DownloadProgress.Failed("Download cancelled")
                 }
-                WorkInfo.State.FAILED -> {
-                    val err = info.outputData.getString(KEY_MODEL_DOWNLOAD_ERROR_MESSAGE)
-                        ?: "Download failed"
-                    _progress.value = DownloadProgress.Failed(err)
-                    trySend(_progress.value)
-                    close()
-                }
-                WorkInfo.State.CANCELLED -> {
-                    _progress.value = DownloadProgress.Failed("Download cancelled")
-                    trySend(_progress.value)
-                    close()
-                }
+
+                _progress.value = nextProgress
+                emit(nextProgress)
+
+                // Keep the flow alive while non-terminal; complete on terminal states so the
+                // collector unsubscribes.
+                info.state !in setOf(
+                    WorkInfo.State.SUCCEEDED,
+                    WorkInfo.State.FAILED,
+                    WorkInfo.State.CANCELLED,
+                )
             }
-        }
-        liveData.observeForever(observer)
-        awaitClose {
-            try {
-                liveData.removeObserver(observer)
-            } catch (t: Throwable) {
-                Log.w(TAG, "removeObserver threw on awaitClose", t)
-            }
-        }
     }
 
     override fun cancelDownload() {
@@ -309,12 +314,17 @@ class BidetModelProviderImpl @Inject constructor(
      * Best-effort HEAD against [url]. Returns the parsed `Content-Length` if present + > 0,
      * else null. Failures (timeout, redirect-loop, malformed header) collapse to null and the
      * caller falls back.
+     *
+     * Phase 4A.1: reuse [HEAD_HTTP_CLIENT] (singleton with bounded connect/read/call
+     * timeouts) instead of `OkHttpClient()` per call. Default OkHttp timeouts are 0 = no
+     * timeout, so a flaky DNS or stalled HEAD could hang the GemmaDownloadScreen launch
+     * effect for minutes. 8s call timeout is plenty for a HEAD against HuggingFace's CDN
+     * and falls back to the constant on the (rare) misses.
      */
     private fun headFetchContentLength(url: String): Long? {
-        val client = OkHttpClient()
         val request = Request.Builder().url(url).head().build()
         return try {
-            client.newCall(request).execute().use { resp ->
+            HEAD_HTTP_CLIENT.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     Log.w(TAG, "HEAD ${url} returned HTTP ${resp.code}")
                     return null
@@ -357,6 +367,17 @@ class BidetModelProviderImpl @Inject constructor(
         // Phase 4A: DataStore key for the cached HEAD result.
         internal val CACHED_TOTAL_BYTES_KEY: Preferences.Key<Long> =
             longPreferencesKey("bidet_model_cached_total_bytes")
+
+        /**
+         * Phase 4A.1: bounded-timeout OkHttp client reused across HEAD calls. Default
+         * OkHttp timeouts are 0 = unlimited; without bounds a flaky network would hang the
+         * download screen's LaunchedEffect during the HEAD-fetch.
+         */
+        private val HEAD_HTTP_CLIENT: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .build()
     }
 }
 
