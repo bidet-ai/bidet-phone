@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Google LLC
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: drop FirebaseAnalytics import + use a literal "app_open" event id so MainActivity compiles without Firebase (bidet zero-telemetry hard rule); the firebaseAnalytics handle is null, so the call site is a no-op anyway.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,7 +55,6 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.GalleryTheme
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.ExperimentalFlags
-import com.google.firebase.analytics.FirebaseAnalytics
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -207,8 +207,11 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
 
+    // bidet-ai: firebaseAnalytics is always null (zero-telemetry); kept as a guarded no-op
+    // call so the upstream code shape stays recognizable. The literal "app_open" mirrors
+    // FirebaseAnalytics.Event.APP_OPEN without requiring the Firebase classpath.
     firebaseAnalytics?.logEvent(
-      FirebaseAnalytics.Event.APP_OPEN,
+      "app_open",
       bundleOf(
         "app_version" to BuildConfig.VERSION_NAME,
         "os_version" to Build.VERSION.SDK_INT.toString(),

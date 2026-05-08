@@ -77,8 +77,11 @@ fun GemmaDownloadScreen(
     // false, but a state restore could land us here mid-Success — defend against that.)
     var kicked by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        // Phase 4A: resolve the dynamic Content-Length while the user is still on the
-        // intro screen so it's ready before the download bar starts updating.
+        // Phase 4A.1 (#9): resolveTotalBytes() is now a suspend function (was fire-and-forget
+        // in 4A — `viewModelScope.launch` returned before the HEAD-fetch completed, and
+        // start() ran with the fallback constant every cold launch). We await the resolved
+        // total before kicking the download so the first InProgress emission already has
+        // the accurate denominator.
         viewModel.resolveTotalBytes()
         if (!kicked && viewModel.modelReady()) {
             onComplete()
@@ -191,11 +194,21 @@ class GemmaDownloadViewModel @Inject constructor(
 
     fun modelReady(): Boolean = provider.isModelReady()
 
-    /** Run on first composition so the screen has the number to render. */
-    fun resolveTotalBytes() {
-        viewModelScope.launch {
-            _totalBytes.value = provider.fetchExpectedTotalBytes()
-        }
+    /**
+     * Run on first composition so the screen has the number to render.
+     *
+     * Phase 4A.1 (#9): was `fun resolveTotalBytes() { viewModelScope.launch { ... } }` — the
+     * launch returned immediately so the calling LaunchedEffect proceeded to viewModel.start()
+     * before the HEAD-fetch completed, and the underlying provider's `cachedTotalBytes`
+     * field still held the fallback when startDownload() snapshotted it. The download bar
+     * then displayed the wrong denominator on every cold launch (until the next launch
+     * picked up the DataStore-cached value).
+     *
+     * Now suspending: the LaunchedEffect awaits the HEAD-fetch (or DataStore cache hit)
+     * before calling start(). 5s/8s timeouts (see fix #10) bound the worst-case wait.
+     */
+    suspend fun resolveTotalBytes() {
+        _totalBytes.value = provider.fetchExpectedTotalBytes()
     }
 
     fun start() {

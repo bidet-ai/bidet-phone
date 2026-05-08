@@ -16,12 +16,14 @@
 
 package com.google.ai.edge.gallery.bidet.service
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -31,6 +33,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.google.ai.edge.gallery.MainActivity
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine
@@ -128,7 +131,12 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
-        stopRecording()
+        // Phase 4A.1: do NOT call stopRecording() here. If the service is being torn down
+        // mid-finalize (e.g. OS shutting us down for memory pressure), stopRecording()'s
+        // launch{} will get cancelled the moment we hit `scope.cancel()` below. The
+        // refactored stopRecording() now handles its own teardown via the launch{} block;
+        // by the time onDestroy() fires there should be no pipeline in flight. Keep
+        // scope.cancel() so any straggler coroutines don't leak past process death.
         scope.cancel()
         super.onDestroy()
     }
@@ -136,6 +144,20 @@ class RecordingService : Service() {
     /** Begin a new recording session. Safe to call when already recording (no-op). */
     fun startRecording() {
         if (pipeline != null) return
+
+        // Phase 4A.1: gate on RECORD_AUDIO. The launcher UI also requests this permission via
+        // rememberLauncherForActivityResult, but the user can revoke from Settings while
+        // the service is alive (or before a recovery start after process death). Without
+        // this guard the AudioRecord ctor would silently fail, the aggregator would never
+        // emit, and the session row would stay with `endedAtMs=null` forever.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "RECORD_AUDIO not granted — refusing to start recording.")
+            handlePermissionDenied()
+            return
+        }
+
         startForegroundCompat()
         if (!requestAudioFocus()) {
             Log.w(TAG, "Audio focus denied — proceeding anyway.")
@@ -187,14 +209,17 @@ class RecordingService : Service() {
             }
         }
         sessionPersistJob = scope.launch {
-            // Throttle: each emission triggers a single update; aggregator updates ~once per
-            // ~30 sec (chunk emit), so this is cheap. We catch + log; transient I/O failure
-            // shouldn't tear down the recording pipeline.
+            // Throttle: each emission triggers a single column-targeted UPDATE; aggregator
+            // updates ~once per ~30 sec (chunk emit), so this is cheap. We catch + log;
+            // transient I/O failure shouldn't tear down the recording pipeline.
+            //
+            // Phase 4A.1: previously did `getById → copy(rawText = text) → update(entity)`,
+            // which would clobber any column written concurrently by SessionDetailViewModel
+            // (tab-cache writes against the same sessionId during a re-open). The
+            // column-targeted updateRawText is atomic.
             aggregator.rawFlow.collectLatest { text ->
                 try {
-                    val existing = sessionDao.getById(sessionId) ?: return@collectLatest
-                    if (existing.rawText == text) return@collectLatest
-                    sessionDao.update(existing.copy(rawText = text))
+                    sessionDao.updateRawText(sessionId, text)
                 } catch (t: Throwable) {
                     Log.w(TAG, "BidetSession rawText update failed: ${t.message}", t)
                 }
@@ -202,7 +227,19 @@ class RecordingService : Service() {
         }
     }
 
-    /** Stop and tear down the pipeline. Safe to call multiple times. */
+    /**
+     * Stop and tear down the pipeline. Safe to call multiple times.
+     *
+     * Phase 4A.1: previous shape called stopForeground + stopSelf eagerly, then launched
+     * finalizeSessionRow on `scope`. If Android tore the service down (long sessions, slow
+     * eMMC, OOM-killer) before WAV concat completed, onDestroy()'s `scope.cancel()` would
+     * abort finalize, leaving `audio.wav.tmp` orphaned and the row's `audioWavPath` null →
+     * Share/Export silently broken.
+     *
+     * Fix: keep the foreground service alive until finalize completes, then tear down on
+     * the Main dispatcher inside the same launch{}. The notification stays visible during
+     * concat so the OS won't reclaim us mid-flush.
+     */
     fun stopRecording() {
         val activePipeline = pipeline
         val sessionId = activePipeline?.sessionId
@@ -221,21 +258,60 @@ class RecordingService : Service() {
         pipeline = null
         abandonAudioFocus()
 
-        // Phase 4A: finalize the BidetSession row — concat WAV (file-system I/O on a
-        // background dispatcher), then write endedAtMs / durationSeconds / chunkCount /
-        // audioWavPath. Run on the service scope so the work survives stopForeground.
         if (sessionId != null && recordingStartedAt > 0L) {
             scope.launch {
-                finalizeSessionRow(sessionId, recordingStartedAt, finalRawText)
+                try {
+                    finalizeSessionRow(sessionId, recordingStartedAt, finalRawText)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "finalizeSessionRow threw: ${t.message}", t)
+                } finally {
+                    withContext(Dispatchers.Main) { tearDownForeground() }
+                }
             }
+        } else {
+            // No active session — tear down immediately.
+            tearDownForeground()
         }
+    }
 
+    /** Phase 4A.1: split out so the finalize-then-stop coroutine has one teardown call. */
+    private fun tearDownForeground() {
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Throwable) {
             // ignore
         }
         stopSelf()
+    }
+
+    /**
+     * Phase 4A.1: when [startRecording] is invoked without RECORD_AUDIO, we still want a
+     * record of the attempt in the sessions list (so the user understands why nothing
+     * appears) and we want the service to clean itself up. We don't call startForeground
+     * here — without RECORD_AUDIO Android won't let a microphone-type FGS run anyway.
+     */
+    private fun handlePermissionDenied() {
+        val sessionId = java.util.UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        scope.launch {
+            try {
+                sessionDao.insert(
+                    BidetSession(
+                        sessionId = sessionId,
+                        startedAtMs = now,
+                        endedAtMs = now,
+                        durationSeconds = 0,
+                        rawText = "",
+                        chunkCount = 0,
+                        notes = "permission_denied",
+                    )
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to insert permission_denied row: ${t.message}", t)
+            } finally {
+                withContext(Dispatchers.Main) { stopSelf() }
+            }
+        }
     }
 
     /**
@@ -266,18 +342,24 @@ class RecordingService : Service() {
         }
 
         try {
+            // Phase 4A.1: single column-targeted finalize UPDATE. Previously did
+            // `getById → copy(...) → update(entity)`, which raced the in-flight
+            // updateRawText emissions from sessionPersistJob (since stopRecording cancels
+            // the persist job but a final emission may still be pending the DB write).
+            // We resolve "what rawText to keep" against the latest persisted row before
+            // dispatching the atomic UPDATE.
             val existing = sessionDao.getById(sessionId)
-            if (existing != null) {
-                sessionDao.update(
-                    existing.copy(
-                        endedAtMs = endedAtMs,
-                        durationSeconds = durationSeconds,
-                        rawText = finalRawText.ifBlank { existing.rawText },
-                        chunkCount = chunkCount,
-                        audioWavPath = wavPath,
-                    )
-                )
-            }
+            val resolvedRawText = if (finalRawText.isNotBlank()) finalRawText
+                else existing?.rawText.orEmpty()
+            sessionDao.finalizeSession(
+                sessionId = sessionId,
+                endedAtMs = endedAtMs,
+                durationSeconds = durationSeconds,
+                rawText = resolvedRawText,
+                chunkCount = chunkCount,
+                audioWavPath = wavPath,
+                notes = null, // preserve existing notes (e.g. "permission_denied")
+            )
         } catch (t: Throwable) {
             Log.w(TAG, "BidetSession finalize update failed: ${t.message}", t)
         }
@@ -347,14 +429,17 @@ class RecordingService : Service() {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 if (!paused) {
-                    pipeline?.captureEngine?.stop()
+                    // Phase 4A.1: soft-pause. Previous code called captureEngine.stop()/start()
+                    // which reset nextChunkIdx=0 + cleared the pending buffer + backbuffer,
+                    // overwriting `0.pcm`/`1.pcm`/... in the same sessions/<id>/chunks/ dir.
+                    pipeline?.captureEngine?.pause()
                     paused = true
-                    Log.i(TAG, "AudioFocus transient loss — pausing capture.")
+                    Log.i(TAG, "AudioFocus transient loss — soft-pausing capture.")
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 if (paused) {
-                    pipeline?.captureEngine?.start()
+                    pipeline?.captureEngine?.resume()
                     paused = false
                     Log.i(TAG, "AudioFocus gain — resuming capture.")
                 }

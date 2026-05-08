@@ -1,6 +1,6 @@
 /*
  * Copyright 2025 Google LLC
- * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook, add fetchWhisperModel task hooked into mergeAssets for Phase 3 build-time Whisper-tiny fetch.
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook, add fetchWhisperModel task hooked into mergeAssets for Phase 3 build-time Whisper-tiny fetch, Phase 4A.1 strip firebase-bom + firebase-analytics + firebase-messaging deps + drop the now-unused google.services plugin alias (zero-telemetry hard rule).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,8 @@ import java.security.MessageDigest
 
 plugins {
   alias(libs.plugins.android.application)
-  // Note: set apply to true to enable google-services (requires google-services.json).
-  alias(libs.plugins.google.services) apply false
+  // bidet-ai Phase 4A.1: google-services plugin alias removed alongside the firebase-* deps
+  // (zero-telemetry hard rule).
   alias(libs.plugins.kotlin.android)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
@@ -144,9 +144,15 @@ dependencies {
   implementation(libs.hilt.android)
   implementation(libs.hilt.navigation.compose)
   implementation(libs.play.services.oss.licenses)
-  implementation(platform(libs.firebase.bom))
-  implementation(libs.firebase.analytics)
-  implementation(libs.firebase.messaging)
+  // bidet-ai Phase 4A.1: firebase-bom + firebase-analytics + firebase-messaging removed
+  // (zero-telemetry hard rule). Analytics.kt is gutted to a no-op handle, FcmMessagingService
+  // deleted, manifest entries stripped. play-services-oss-licenses is NOT a Firebase dep so
+  // it stays.
+  // bidet-ai Phase 4A.1: androidx-documentfile is wired explicitly because upstream
+  // Gallery's customtasks/agentchat/SkillManagerViewModel.kt imports
+  // androidx.documentfile.provider.DocumentFile (used to resolve transitively through
+  // firebase). Phase 2 deletes the consuming tree; until then this keeps the build green.
+  implementation(libs.androidx.documentfile)
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
   // bidet-ai: Whisper.cpp Android JNI bindings for ASR.

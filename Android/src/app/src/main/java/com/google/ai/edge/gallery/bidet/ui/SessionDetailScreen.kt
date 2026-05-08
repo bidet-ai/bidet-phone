@@ -53,10 +53,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -217,27 +221,33 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
-    val state: StateFlow<SessionDetailUiState> = kotlinx.coroutines.flow.flow {
-        emit(SessionDetailUiState())
-        sessionIdFlow.collect { id ->
+    /**
+     * Phase 4A.1: was a nested-collect (`sessionIdFlow.collect { id ->
+     * sessionDao.observeById(id).collect { ... } }`). Room flows are infinite, so the inner
+     * `.collect` never completed and a subsequent `sessionId` emission could not advance the
+     * outer collector. Refactored to `flatMapLatest`, which cancels the prior inner flow on
+     * each new id and resubscribes — exactly what we want when the user navigates between
+     * sessions while the screen is alive.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val state: StateFlow<SessionDetailUiState> = sessionIdFlow
+        .flatMapLatest { id ->
             if (id.isEmpty()) {
-                emit(SessionDetailUiState())
-                return@collect
-            }
-            sessionDao.observeById(id).collect { row ->
-                emit(
+                flowOf(SessionDetailUiState())
+            } else {
+                sessionDao.observeById(id).map { row ->
                     SessionDetailUiState(
                         session = row,
                         notFound = row == null,
                     )
-                )
+                }
             }
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = SessionDetailUiState(),
-    )
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = SessionDetailUiState(),
+        )
 
     private val _cleanState = MutableStateFlow<TabState>(TabState.Idle)
     val cleanState: StateFlow<TabState> = _cleanState.asStateFlow()
@@ -284,14 +294,15 @@ class SessionDetailViewModel @Inject constructor(
                 }
                 val now = System.currentTimeMillis()
                 target.value = TabState.Cached(result, now)
-                // Persist back to the BidetSession row so re-opens are instant.
-                val current = sessionDao.getById(sessionId) ?: return@launch
-                val updated = when (kind) {
-                    TabKind.Clean -> current.copy(cleanCached = result)
-                    TabKind.Analysis -> current.copy(analysisCached = result)
-                    TabKind.Forai -> current.copy(foraiCached = result)
+                // Phase 4A.1: persist via column-targeted UPDATE. Previous code did
+                // `getById → copy(field = result) → update(entity)`, which raced sibling
+                // tab-gen flows: simultaneous CLEAN+ANALYSIS taps could both read the same
+                // row, then second-to-finish would clobber first's column with null.
+                when (kind) {
+                    TabKind.Clean -> sessionDao.updateCleanCached(sessionId, result)
+                    TabKind.Analysis -> sessionDao.updateAnalysisCached(sessionId, result)
+                    TabKind.Forai -> sessionDao.updateForaiCached(sessionId, result)
                 }
-                sessionDao.update(updated)
             } catch (t: Throwable) {
                 target.value = TabState.Failed(t.message ?: "Generation failed")
             }

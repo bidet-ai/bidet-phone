@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Google LLC
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: drop Firebase init (bidet zero-telemetry hard rule); the firebase-bom + firebase-analytics + firebase-messaging deps are stripped from app/build.gradle.kts.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +20,6 @@ package com.google.ai.edge.gallery
 import android.app.Application
 import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.ui.theme.ThemeSettings
-import com.google.firebase.FirebaseApp
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -34,6 +34,6 @@ class GalleryApplication : Application() {
     // Load saved theme.
     ThemeSettings.themeOverride.value = dataStoreRepository.readTheme()
 
-    FirebaseApp.initializeApp(this)
+    // bidet-ai: FirebaseApp.initializeApp() removed (zero-telemetry hard rule).
   }
 }

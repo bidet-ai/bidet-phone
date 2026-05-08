@@ -290,10 +290,18 @@ class SessionsListViewModel @Inject constructor(
                     val baseDir = context.getExternalFilesDir(null) ?: return@runCatching
                     val dir = File(baseDir, "sessions/$sessionId")
                     if (dir.exists()) dir.deleteRecursively()
-                    // Be defensive about a stale audioWavPath that points outside dir.
+                    // Phase 4A.1: be defensive about a stale audioWavPath that points
+                    // OUTSIDE the per-session dir (deleteRecursively above already covered
+                    // the inside-dir case). Previous condition `f.absolutePath !in
+                    // dir.absolutePath` was substring containment — backwards in two ways:
+                    // (a) `String.contains(other)` semantics on `in` for strings → `f` was
+                    // checked against being a substring of dir, the wrong direction; (b)
+                    // even read the right way around, raw `contains` would have false-
+                    // positived for sibling sessions whose paths share the parent prefix.
                     session?.audioWavPath?.let { path ->
                         val f = File(path)
-                        if (f.exists() && f.absolutePath !in dir.absolutePath) f.delete()
+                        val inDir = f.absolutePath.startsWith(dir.absolutePath + File.separator)
+                        if (f.exists() && !inDir) f.delete()
                     }
                 }
             }

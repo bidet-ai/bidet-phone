@@ -45,9 +45,22 @@ import kotlin.math.max
  *  - PCM bytes only (NOT WAV-with-header) — Whisper.cpp's transcribe API takes raw float32 PCM.
  *
  * Lifecycle is owned by [com.google.ai.edge.gallery.bidet.service.RecordingService]:
- *  - [start] arms the AudioRecord and spawns the reader thread.
+ *  - [start] arms the AudioRecord and spawns the reader thread (idempotent — if [start] has
+ *    already run for this session, subsequent calls clear [paused] and resume the existing
+ *    reader thread without resetting [nextChunkIdx] / [pendingBuffer] / [backbuffer]).
+ *  - [pause] / [resume] flip a soft-pause flag for transient AudioFocus loss (e.g. a phone
+ *    call). The reader thread + AudioRecord stay alive; reads loop without dispatching bytes
+ *    to the pending buffer. Resume picks up the chunk index where pause left it.
  *  - [stop] flushes any tail audio (<30 sec since last emit), terminates the thread, releases
  *    the AudioRecord. Safe to call multiple times.
+ *
+ * Phase 4A.1 fix: prior code reset `nextChunkIdx = 0` + cleared `pendingBuffer` /
+ * `backbuffer` on every `start()`. When AudioFocus listener called `stop()`/`start()` on
+ * transient loss/gain (incoming call), the second `start()` overwrote chunks `0.pcm`,
+ * `1.pcm`, ... in the same `sessions/<id>/chunks/` directory. Fix: gate the reset on a
+ * one-shot `initialized` flag (only the first start of a session resets), and switch the
+ * AudioFocus transient handler to use the soft-pause path so AudioRecord/threading state
+ * survives the focus blip.
  */
 class AudioCaptureEngine(
     private val context: Context,
@@ -56,6 +69,9 @@ class AudioCaptureEngine(
 ) {
 
     private val running = AtomicBoolean(false)
+    private val paused = AtomicBoolean(false)
+    /** One-shot: true after the first successful [start] for this engine instance. */
+    private val initialized = AtomicBoolean(false)
     private var recorder: AudioRecord? = null
     private var readerThread: Thread? = null
     private var sessionDir: File? = null
@@ -79,11 +95,19 @@ class AudioCaptureEngine(
             Log.w(TAG, "start() called while already running — no-op.")
             return
         }
-        sessionStartMs = System.currentTimeMillis()
-        nextChunkIdx = 0
-        pendingBuffer.clear()
-        pendingBytes = 0
-        backbuffer = ByteArray(0)
+        // Phase 4A.1: only the FIRST start() of this engine instance resets per-session state.
+        // Subsequent start() calls (after stop()/start() ping-pongs) preserve the chunk index +
+        // pending buffer + backbuffer so chunk filenames don't collide with previously written
+        // ones in `sessions/<id>/chunks/`. The preferred recovery path for transient AudioFocus
+        // loss is now [pause]/[resume]; this guard is belt-and-suspenders for any caller that
+        // still reaches for stop()/start().
+        if (initialized.compareAndSet(false, true)) {
+            sessionStartMs = System.currentTimeMillis()
+            nextChunkIdx = 0
+            pendingBuffer.clear()
+            pendingBytes = 0
+            backbuffer = ByteArray(0)
+        }
 
         // Prepare per-session storage for crash recovery.
         sessionDir = File(context.getExternalFilesDir(null), "sessions/$sessionId/chunks")
@@ -103,11 +127,38 @@ class AudioCaptureEngine(
             bufferSize,
         ).also { it.startRecording() }
 
+        // Always clear the soft-pause flag — both fresh starts and post-stop restarts mean
+        // "ingest bytes again".
+        paused.set(false)
+
         readerThread = thread(name = "BidetAudioReader", isDaemon = true) {
             readLoop(bufferSize)
         }
 
-        Log.i(TAG, "start: sessionId=$sessionId bufferSize=$bufferSize")
+        Log.i(TAG, "start: sessionId=$sessionId bufferSize=$bufferSize " +
+            "nextChunkIdx=$nextChunkIdx (initialized=${initialized.get()})")
+    }
+
+    /**
+     * Phase 4A.1: soft-pause for transient AudioFocus loss (incoming call etc.).
+     *
+     * Sets [paused] = true. The reader thread keeps draining the AudioRecord (so the
+     * hardware doesn't overflow its internal buffer) but skips appending those bytes to
+     * [pendingBuffer]. AudioRecord and the reader thread stay alive across the focus blip.
+     * On [resume] the chunk index, pending buffer, and backbuffer are exactly where pause
+     * left them — no chunk overwrite, no new session.
+     */
+    fun pause() {
+        if (paused.compareAndSet(false, true)) {
+            Log.i(TAG, "pause: soft-pause active (idx=$nextChunkIdx, pending=$pendingBytes).")
+        }
+    }
+
+    /** Phase 4A.1: counterpart to [pause]. Idempotent. */
+    fun resume() {
+        if (paused.compareAndSet(true, false)) {
+            Log.i(TAG, "resume: continuing capture from idx=$nextChunkIdx pending=$pendingBytes.")
+        }
     }
 
     /** Stop reading, flush any pending tail audio, release the recorder. Idempotent. */
@@ -142,6 +193,10 @@ class AudioCaptureEngine(
             val rec = recorder ?: break
             val n = rec.read(readBuf, 0, readBuf.size)
             if (n <= 0) continue
+            // Phase 4A.1: while soft-paused (transient AudioFocus loss), keep draining the
+            // hardware buffer but discard the bytes — the AudioRecord stays armed so
+            // [resume] is instant, but we don't ingest the user's voice during a phone call.
+            if (paused.get()) continue
             // Append a copy of the just-read chunk into the pending deque.
             val slice = readBuf.copyOf(n)
             pendingBuffer.addLast(slice)
