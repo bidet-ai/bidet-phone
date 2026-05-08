@@ -18,7 +18,10 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    # Phase 2 stacks PRs onto feat/v0.1-phase-1 until Phase 1 lands on main;
+    # CI fires for PRs against either base so each phase gets a green check
+    # before the parent phase merges.
+    branches: [main, "feat/v0.1-phase-*"]
 
 jobs:
   build:
