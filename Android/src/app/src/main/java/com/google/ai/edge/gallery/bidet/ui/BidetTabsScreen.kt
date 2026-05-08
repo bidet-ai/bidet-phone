@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,6 +62,7 @@ fun BidetTabsScreen(
     viewModel: BidetTabsViewModel,
     isRecording: Boolean,
     onToggleRecording: () -> Unit,
+    onOpenHistory: () -> Unit = {},
 ) {
     val pagerState = rememberPagerState(initialPage = TAB_INDEX_RAW, pageCount = { TAB_TITLES.size })
     val coroutineScope = rememberCoroutineScope()
@@ -70,6 +72,12 @@ fun BidetTabsScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.bidet_app_name)) },
                 actions = {
+                    IconButton(onClick = onOpenHistory) {
+                        Icon(
+                            Icons.Filled.History,
+                            contentDescription = "History",
+                        )
+                    }
                     IconButton(onClick = onToggleRecording) {
                         if (isRecording) {
                             Icon(

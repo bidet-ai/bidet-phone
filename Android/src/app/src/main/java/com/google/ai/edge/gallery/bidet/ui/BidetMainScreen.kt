@@ -85,6 +85,11 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
         }
     }
 
+    // Phase 4A: history navigation lives at this layer so SessionsList / SessionDetail can
+    // stack on top of the live recorder Ready screen without rebuilding consent + download
+    // gates each time.
+    var route by remember { mutableStateOf<BidetRoute>(BidetRoute.Main) }
+
     when (phase) {
         Phase.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Loading…")
@@ -110,10 +115,31 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
             onComplete = { phase = Phase.Ready },
         )
 
-        Phase.Ready -> ReadyScreen(
-            onRequestDownload = { phase = Phase.NeedsDownload },
-        )
+        Phase.Ready -> when (val r = route) {
+            BidetRoute.Main -> ReadyScreen(
+                onRequestDownload = { phase = Phase.NeedsDownload },
+                onOpenHistory = { route = BidetRoute.SessionsList },
+            )
+            BidetRoute.SessionsList -> SessionsListScreen(
+                onBack = { route = BidetRoute.Main },
+                onOpenSession = { id -> route = BidetRoute.SessionDetail(id) },
+            )
+            is BidetRoute.SessionDetail -> SessionDetailScreen(
+                sessionId = r.sessionId,
+                onBack = { route = BidetRoute.SessionsList },
+            )
+        }
     }
+}
+
+/**
+ * Phase 4A in-memory routes. Lightweight alternative to a NavController — the bidet flow
+ * has 3 destinations + 2 gates and doesn't justify the navigation-compose overhead for v0.1.
+ */
+private sealed class BidetRoute {
+    object Main : BidetRoute()
+    object SessionsList : BidetRoute()
+    data class SessionDetail(val sessionId: String) : BidetRoute()
 }
 
 private sealed class Phase {
@@ -130,7 +156,10 @@ private sealed class Phase {
  * caller flips back to [Phase.NeedsDownload].
  */
 @Composable
-private fun ReadyScreen(onRequestDownload: () -> Unit) {
+private fun ReadyScreen(
+    onRequestDownload: () -> Unit,
+    onOpenHistory: () -> Unit,
+) {
     val context = LocalContext.current
     val viewModel: BidetTabsViewModel = hiltViewModel()
 
@@ -201,6 +230,7 @@ private fun ReadyScreen(onRequestDownload: () -> Unit) {
             viewModel = viewModel,
             isRecording = isRecording,
             onToggleRecording = onToggleRecording,
+            onOpenHistory = onOpenHistory,
         )
     } else {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -212,6 +242,7 @@ private fun ReadyScreen(onRequestDownload: () -> Unit) {
                 Text("Bidet AI")
                 Text("Tap Record to begin a brain-dump.")
                 Button(onClick = onToggleRecording) { Text("Record") }
+                Button(onClick = onOpenHistory) { Text("History") }
             }
         }
     }
