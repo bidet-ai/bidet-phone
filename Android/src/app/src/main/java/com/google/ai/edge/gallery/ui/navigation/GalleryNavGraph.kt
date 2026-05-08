@@ -76,7 +76,6 @@ import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.isLegacyTasks
 import com.google.ai.edge.gallery.firebaseAnalytics
-import com.google.ai.edge.gallery.ui.benchmark.BenchmarkScreen
 import com.google.ai.edge.gallery.ui.common.ErrorDialog
 import com.google.ai.edge.gallery.ui.common.ModelPageAppBar
 import com.google.ai.edge.gallery.ui.common.chat.ModelDownloadStatusInfoPanel
@@ -417,26 +416,7 @@ fun GalleryNavHost(
       )
     }
 
-    // Benchmark creation page.
-    composable(
-      route = "$ROUTE_BENCHMARK/{modelName}",
-      arguments = listOf(navArgument("modelName") { type = NavType.StringType }),
-      enterTransition = { slideEnter() },
-      exitTransition = { slideExit() },
-    ) { backStackEntry ->
-      val modelName = backStackEntry.arguments?.getString("modelName") ?: ""
-
-      modelManagerViewModel.getModelByName(name = modelName)?.let { model ->
-        BenchmarkScreen(
-          initialModel = model,
-          modelManagerViewModel = modelManagerViewModel,
-          onBackClicked = {
-            enableModelListAnimation = false
-            navController.navigateUp()
-          },
-        )
-      }
-    }
+    // bidet-ai Phase 2: benchmark route removed alongside ui/benchmark deletion.
   }
 
   // Handle incoming intents for deep links
