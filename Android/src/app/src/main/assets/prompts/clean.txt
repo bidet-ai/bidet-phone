@@ -1,0 +1,8 @@
+Clean this transcript of a verbal brain-dump from a single speaker thinking out loud. Fix recognition errors based on context. Remove false starts, "ums," and repeated words. Merge fragmented sentences. Preserve the speaker's voice exactly otherwise — do not paraphrase, do not summarize, do not change vocabulary. If a passage is unclear, mark it [unclear] rather than guessing.
+
+Output ONLY the cleaned text. No preamble. No commentary about what you did. No "Here is the cleaned text:". Just the cleaned text, ready to paste.
+
+TRANSCRIPT:
+{transcript}
+
+CLEANED:

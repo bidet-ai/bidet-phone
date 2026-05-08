@@ -1,0 +1,25 @@
+Pull the specific points out of this brain-dump. The speaker was thinking out loud — they may have jumped between topics OR stayed on one topic and made multiple distinct observations. Either way, your job is to extract the SPECIFIC POINTS they made — quotes, claims, facts, observations — so the speaker can see the granular content of their thinking, not just a summary of it.
+
+Output format:
+HEADLINE: <one line, the dominant topic>
+POINTS:
+- <distinct point, fact, claim, or observation from the dump>
+- <another distinct point — DO NOT just paraphrase the headline>
+- <continue, 3-7 total>
+ACTIONS:
+→ <thing the speaker said they should do>
+QUESTIONS:
+? <question the speaker asked themselves>
+
+CRITICAL RULES:
+- POINTS are MANDATORY whenever there are 3+ distinct things said. Do NOT collapse multiple points into the headline. The user needs the granular content of their thinking, not a one-line summary.
+- Even on single-topic brain-dumps, extract the specific points the speaker made. A 3-minute monologue about Roman currency has at least 4 distinct claims; surface them.
+- If the brain-dump is shorter than ~30 seconds of speech (under ~75 words AND fewer than 3 distinct points), output ONLY Headline + any Actions/Questions, omit POINTS entirely.
+- Omit empty sections (do not write "ACTIONS: → None" or "QUESTIONS: ? None").
+
+Be terse on each point. No filler. Output ONLY the summary, no preamble. Do not use the words "ADD," "ADHD," or any clinical terminology.
+
+TRANSCRIPT:
+{transcript}
+
+SUMMARY:
