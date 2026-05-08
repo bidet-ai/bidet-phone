@@ -19,4 +19,14 @@
     <cache-path
         name="cache_pictures"
         path="images/" />
+    <!--
+      bidet-ai Phase 4A: expose recorded WAVs at
+      ${externalFilesDir}/sessions/<session_id>/audio.wav so the share sheet (Intent.ACTION_SEND
+      with type=audio/wav) can grant transient read access to the receiving app via
+      androidx.core.content.FileProvider. The path scope is intentionally narrow — only the
+      sessions/ subtree, no other externalFilesDir contents.
+    -->
+    <external-files-path
+        name="bidet_sessions"
+        path="sessions/" />
 </paths>

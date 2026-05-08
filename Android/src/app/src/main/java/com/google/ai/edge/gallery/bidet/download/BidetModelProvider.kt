@@ -18,6 +18,11 @@ package com.google.ai.edge.gallery.bidet.download
 
 import android.content.Context
 import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -41,12 +46,17 @@ import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * State of the Gemma 4 E4B model download. Surfaced to [GemmaDownloadScreen].
@@ -103,6 +113,19 @@ interface BidetModelProvider {
 
     /** Cancel an in-flight download. No-op when no work is enqueued. */
     fun cancelDownload()
+
+    /**
+     * Phase 4A: dynamic Content-Length resolution.
+     *
+     * Issues an HTTP HEAD against [BidetModelProviderImpl.MODEL_URL] (or an alternative URL
+     * passed in for testing) and returns the parsed `Content-Length` header. Falls back to
+     * [BidetModelProviderImpl.EXPECTED_TOTAL_BYTES_FALLBACK] if the request fails or the
+     * header is missing/malformed.
+     *
+     * The result is cached in the bidet-download DataStore so subsequent launches don't
+     * re-HEAD on every cold start. Call again after model invalidation to refresh.
+     */
+    suspend fun fetchExpectedTotalBytes(): Long
 }
 
 /**
@@ -130,6 +153,13 @@ class BidetModelProviderImpl @Inject constructor(
     private val _progress = MutableStateFlow<DownloadProgress>(DownloadProgress.Idle)
     override val progress: StateFlow<DownloadProgress> = _progress.asStateFlow()
 
+    /**
+     * Phase 4A: dynamic Content-Length cache. Initialized from the fallback constant; the
+     * first successful HEAD-fetch overwrites it (and persists to DataStore so cold starts
+     * after the first launch get the accurate total without re-HEADing).
+     */
+    @Volatile private var cachedTotalBytes: Long = EXPECTED_TOTAL_BYTES_FALLBACK
+
     override fun isModelReady(): Boolean {
         val f = getModelPath() ?: return false
         return f.exists() && f.length() > 0L
@@ -141,6 +171,10 @@ class BidetModelProviderImpl @Inject constructor(
     }
 
     override fun startDownload(): Flow<DownloadProgress> = callbackFlow {
+        // Snapshot the best-known total now so all observer paths agree. The HEAD-fetch may
+        // refine this in [fetchExpectedTotalBytes]; any value the screen has fed through us
+        // wins over the fallback.
+        val totalBytes = cachedTotalBytes
         val inputData = Data.Builder()
             .putString(KEY_MODEL_NAME, MODEL_NAME)
             .putString(KEY_MODEL_URL, MODEL_URL)
@@ -149,7 +183,7 @@ class BidetModelProviderImpl @Inject constructor(
             .putString(KEY_MODEL_DOWNLOAD_FILE_NAME, FILE_NAME)
             .putBoolean(KEY_MODEL_IS_ZIP, false)
             .putString(KEY_MODEL_UNZIPPED_DIR, "")
-            .putLong(KEY_MODEL_TOTAL_BYTES, EXPECTED_TOTAL_BYTES)
+            .putLong(KEY_MODEL_TOTAL_BYTES, totalBytes)
             .build()
 
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
@@ -171,7 +205,7 @@ class BidetModelProviderImpl @Inject constructor(
                         _progress.value = DownloadProgress.InProgress(
                             percent = 0,
                             bytesDownloaded = 0L,
-                            totalBytes = EXPECTED_TOTAL_BYTES,
+                            totalBytes = totalBytes,
                             bytesPerSec = 0L,
                         )
                         trySend(_progress.value)
@@ -180,12 +214,12 @@ class BidetModelProviderImpl @Inject constructor(
                 WorkInfo.State.RUNNING -> {
                     val downloaded = info.progress.getLong(KEY_MODEL_DOWNLOAD_RECEIVED_BYTES, 0L)
                     val rate = info.progress.getLong(KEY_MODEL_DOWNLOAD_RATE, 0L)
-                    val total = if (EXPECTED_TOTAL_BYTES > 0) EXPECTED_TOTAL_BYTES else 1L
+                    val total = if (totalBytes > 0) totalBytes else 1L
                     val percent = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
                     _progress.value = DownloadProgress.InProgress(
                         percent = percent,
                         bytesDownloaded = downloaded,
-                        totalBytes = EXPECTED_TOTAL_BYTES,
+                        totalBytes = totalBytes,
                         bytesPerSec = rate,
                     )
                     trySend(_progress.value)
@@ -232,6 +266,69 @@ class BidetModelProviderImpl @Inject constructor(
         workManager.cancelUniqueWork(WORK_NAME)
     }
 
+    /**
+     * Phase 4A. Strategy:
+     *   1. Read the cached value from DataStore. If non-null + > 0, hydrate
+     *      [cachedTotalBytes] and return immediately — no network call needed.
+     *   2. Otherwise, issue an HTTP HEAD. Note: HuggingFace returns a 302 redirect on the
+     *      `/resolve/` URL, so we let OkHttp follow redirects (default).
+     *   3. On success, cache + return. On failure, log and return the fallback.
+     */
+    override suspend fun fetchExpectedTotalBytes(): Long = withContext(Dispatchers.IO) {
+        val ds = context.bidetDownloadDataStore
+        val cached = try {
+            ds.data.first()[CACHED_TOTAL_BYTES_KEY]
+        } catch (t: Throwable) {
+            Log.w(TAG, "DataStore read for cached total bytes failed: ${t.message}", t)
+            null
+        }
+        if (cached != null && cached > 0L) {
+            cachedTotalBytes = cached
+            return@withContext cached
+        }
+
+        val fetched = headFetchContentLength(MODEL_URL)
+        if (fetched != null && fetched > 0L) {
+            cachedTotalBytes = fetched
+            try {
+                ds.edit { it[CACHED_TOTAL_BYTES_KEY] = fetched }
+            } catch (t: Throwable) {
+                Log.w(TAG, "DataStore write for cached total bytes failed: ${t.message}", t)
+            }
+            return@withContext fetched
+        }
+        Log.w(
+            TAG,
+            "HEAD fetch for Content-Length failed; falling back to constant " +
+                "$EXPECTED_TOTAL_BYTES_FALLBACK.",
+        )
+        EXPECTED_TOTAL_BYTES_FALLBACK
+    }
+
+    /**
+     * Best-effort HEAD against [url]. Returns the parsed `Content-Length` if present + > 0,
+     * else null. Failures (timeout, redirect-loop, malformed header) collapse to null and the
+     * caller falls back.
+     */
+    private fun headFetchContentLength(url: String): Long? {
+        val client = OkHttpClient()
+        val request = Request.Builder().url(url).head().build()
+        return try {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    Log.w(TAG, "HEAD ${url} returned HTTP ${resp.code}")
+                    return null
+                }
+                val headerValue = resp.header("Content-Length") ?: return null
+                val parsed = headerValue.toLongOrNull() ?: return null
+                if (parsed > 0L) parsed else null
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "HEAD ${url} threw: ${t.message}", t)
+            null
+        }
+    }
+
     companion object {
         private const val TAG = "BidetModelProvider"
 
@@ -247,11 +344,26 @@ class BidetModelProviderImpl @Inject constructor(
         const val MODEL_DIR: String = "models"
         const val VERSION: String = "v1"
 
-        // 3.66 GB per HuggingFace metadata 2026-05-07. Used for percent calculation;
-        // DownloadWorker also pulls Content-Length from the server.
-        const val EXPECTED_TOTAL_BYTES: Long = 3_927_823_312L
+        /**
+         * Fallback used when [fetchExpectedTotalBytes] cannot resolve a Content-Length. 3.66 GB
+         * per HuggingFace metadata 2026-05-07. Phase 4A renamed from EXPECTED_TOTAL_BYTES to
+         * make the fallback role explicit.
+         */
+        const val EXPECTED_TOTAL_BYTES_FALLBACK: Long = 3_927_823_312L
 
         const val WORK_NAME: String = "bidet_gemma4_e4b_download"
         const val WORK_TAG: String = "bidet_model_download"
+
+        // Phase 4A: DataStore key for the cached HEAD result.
+        internal val CACHED_TOTAL_BYTES_KEY: Preferences.Key<Long> =
+            longPreferencesKey("bidet_model_cached_total_bytes")
     }
 }
+
+/**
+ * Bidet-download DataStore. Lives in its own file so it doesn't share the `bidet` tab-cache
+ * DataStore (defined in BidetTabsViewModel). One file per app process.
+ */
+private val Context.bidetDownloadDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "bidet_download",
+)
