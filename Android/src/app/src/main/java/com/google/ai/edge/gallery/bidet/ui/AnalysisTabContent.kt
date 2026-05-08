@@ -24,8 +24,9 @@ import com.google.ai.edge.gallery.R
  * ANALYSIS tab — for the SPEAKER themselves: tangent-driven thinking organized into a
  * Headline + Threads + Action items + Open questions. Brief §6, §Constraints.
  *
- * Public-facing copy here deliberately avoids clinical terms (the banWordCheck task enforces
- * this; "ADHD", "ADD", etc. would fail the build).
+ * Public-facing copy here deliberately avoids clinical terms; the banWordCheck Gradle task
+ * enforces this against the production user-visible code paths (strings.xml + Kotlin
+ * literals).
  */
 @Composable
 fun AnalysisTabContent(state: TabState, onGenerate: () -> Unit) {

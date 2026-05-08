@@ -53,7 +53,10 @@ abstract class BanWordCheckTask : org.gradle.api.DefaultTask() {
             "ADD" to true
         )
 
-        // Files to scan: strings.xml, the entire assets dir, and Kotlin source under main/.
+        // Files to scan: strings.xml, user-facing assets (skills + tinygarden + general
+        // resources) — NOT prompts/, which are LLM-side instructions that may legitimately
+        // mention banned terms in a "do not use the word X" form. And all Kotlin source under
+        // main/.
         val targets: List<java.io.File> = mutableListOf<java.io.File>().apply {
             val stringsXml = java.io.File(root, "src/main/res/values/strings.xml")
             if (stringsXml.exists()) add(stringsXml)
@@ -61,6 +64,13 @@ abstract class BanWordCheckTask : org.gradle.api.DefaultTask() {
             if (assets.exists()) addAll(
                 assets.walkTopDown()
                     .filter { it.isFile && it.extension.lowercase() in setOf("txt", "md", "json", "xml", "html", "js", "ts") }
+                    // assets/prompts/ feeds Gemma directly, not the user. Exempt by design.
+                    // assets/whisper/ holds the model bin (excluded by extension filter, but be
+                    // explicit).
+                    .filter { f ->
+                        val rel = f.relativeTo(assets).path.replace(java.io.File.separatorChar, '/')
+                        !rel.startsWith("prompts/") && !rel.startsWith("whisper/")
+                    }
                     .toList()
             )
             val kotlinMain = java.io.File(root, "src/main")
@@ -71,24 +81,38 @@ abstract class BanWordCheckTask : org.gradle.api.DefaultTask() {
             )
         }
 
+        // For .kt files we scan only string literals (per brief §12). For .xml/.txt/.md/.json
+        // and other resource-style files we scan the whole document.
+        val klitRegex = Pattern.compile("\"([^\"\\\\]|\\\\.)*\"")
         val violations = mutableListOf<String>()
         for (file in targets) {
             val text = try { file.readText() } catch (t: Throwable) {
                 logger.warn("banWordCheck: cannot read $file: ${t.message}")
                 continue
             }
+            val ext = file.extension.lowercase()
+            // Build the substring(s) we'll scan.
+            data class Segment(val text: String, val absStart: Int)
+            val segments: List<Segment> = if (ext in setOf("kt", "kts")) {
+                val out = mutableListOf<Segment>()
+                val m = klitRegex.matcher(text)
+                while (m.find()) {
+                    out.add(Segment(text.substring(m.start(), m.end()), m.start()))
+                }
+                out
+            } else {
+                listOf(Segment(text, 0))
+            }
             for ((token, caseSensitive) in banned) {
                 val flags = if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE
-                // Word boundary on both sides — \b only treats letters/digits/_ as word chars,
-                // which is fine for our list (multi-word entries like "middle school" still
-                // get bounded on the outer letters).
                 val pattern = Pattern.compile("\\b" + token + "\\b", flags)
-                val matcher = pattern.matcher(text)
-                while (matcher.find()) {
-                    // Compute line number of the match for friendly reporting.
-                    val before = text.substring(0, matcher.start())
-                    val line = before.count { it == '\n' } + 1
-                    violations.add("${file.relativeTo(project.rootDir)}:$line: matched banned token '${matcher.group()}' (rule: '$token', caseSensitive=$caseSensitive)")
+                for (seg in segments) {
+                    val matcher = pattern.matcher(seg.text)
+                    while (matcher.find()) {
+                        val absOffset = seg.absStart + matcher.start()
+                        val line = text.substring(0, absOffset).count { it == '\n' } + 1
+                        violations.add("${file.relativeTo(project.rootDir)}:$line: matched banned token '${matcher.group()}' (rule: '$token', caseSensitive=$caseSensitive)")
+                    }
                 }
             }
         }
