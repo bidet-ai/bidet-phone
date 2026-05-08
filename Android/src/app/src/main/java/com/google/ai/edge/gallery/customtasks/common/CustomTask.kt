@@ -53,11 +53,9 @@ import kotlinx.coroutines.CoroutineScope
  *    implementation into a set of `CustomTask`s. This makes your task automatically discoverable by
  *    the app's home screen.
  *
- * For a concrete example of how to implement these steps, see the
- * [com.google.ai.edge.gallery.customtasks.examplecustomtask.ExampleCustomTask] class. This example
- * implements a "Model Viewer" task that displays the text content of a model file for demonstration
- * purpose. See comments there for more details.
- *
+ * (bidet-ai Phase 2: upstream Gallery shipped an `ExampleCustomTask` reference here; that
+ * package was removed during the Phase 2 strip. The interface is retained so the surviving
+ * built-in task module — `LlmChatTaskModule` — continues to bind into the [CustomTask] set.)
  */
 interface CustomTask {
   /**
