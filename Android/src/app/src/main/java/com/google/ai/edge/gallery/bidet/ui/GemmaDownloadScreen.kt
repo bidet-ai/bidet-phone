@@ -70,12 +70,16 @@ fun GemmaDownloadScreen(
     viewModel: GemmaDownloadViewModel = hiltViewModel(),
 ) {
     val state by viewModel.progress.collectAsStateWithLifecycle()
+    val totalBytes by viewModel.totalBytes.collectAsStateWithLifecycle()
 
     // Auto-kick the download on first composition if we're sitting at Idle and the model is not
     // already present. (The caller [BidetMainScreen] only routes here when isModelReady() is
     // false, but a state restore could land us here mid-Success — defend against that.)
     var kicked by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
+        // Phase 4A: resolve the dynamic Content-Length while the user is still on the
+        // intro screen so it's ready before the download bar starts updating.
+        viewModel.resolveTotalBytes()
         if (!kicked && viewModel.modelReady()) {
             onComplete()
         } else if (!kicked) {
@@ -97,7 +101,11 @@ fun GemmaDownloadScreen(
             style = MaterialTheme.typography.headlineSmall,
         )
         Text(
-            text = "This is a one-time download (~3.7 GB). Subsequent launches will be instant.",
+            // Phase 4A: prefer the live HEAD-resolved size when available, else show the
+            // approximate from the fallback constant.
+            text = "This is a one-time download (${
+                totalBytes?.let { formatBytes(it) } ?: "~3.7 GB"
+            }). Subsequent launches will be instant.",
         )
 
         Spacer(Modifier.height(8.dp))
@@ -174,7 +182,21 @@ class GemmaDownloadViewModel @Inject constructor(
 
     val progress: StateFlow<DownloadProgress> = provider.progress
 
+    /**
+     * Phase 4A: dynamic Content-Length. Initialized to null; resolved by [resolveTotalBytes]
+     * via HEAD-fetch or DataStore cache. The screen displays this once known.
+     */
+    private val _totalBytes = kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
+    val totalBytes: StateFlow<Long?> = _totalBytes
+
     fun modelReady(): Boolean = provider.isModelReady()
+
+    /** Run on first composition so the screen has the number to render. */
+    fun resolveTotalBytes() {
+        viewModelScope.launch {
+            _totalBytes.value = provider.fetchExpectedTotalBytes()
+        }
+    }
 
     fun start() {
         viewModelScope.launch {
