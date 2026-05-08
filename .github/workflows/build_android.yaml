@@ -1,0 +1,90 @@
+# Copyright 2026 bidet-ai contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# CI workflow for bidet-phone:
+#   - Push to any branch: build assembleDebug, run unit tests + banWordCheck.
+#   - Push of a v* tag: build assembleRelease with the keystore from GitHub Secrets,
+#     attach the signed APK to the matching GitHub Release.
+
+name: Android build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: Android/src
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v3
+
+      - name: Run banWordCheck
+        run: ./gradlew :app:banWordCheck
+
+      - name: Run unit tests
+        run: ./gradlew :app:test
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Decode release keystore (only on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_B64" ]; then
+            echo "RELEASE_KEYSTORE_B64 secret missing — release tag pushed without keystore."
+            exit 1
+          fi
+          echo "$RELEASE_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Assemble release APK (only on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_KEYSTORE_PATH: ${{ env.RELEASE_KEYSTORE_PATH }}
+          RELEASE_KEYSTORE_PASS: ${{ secrets.RELEASE_KEYSTORE_PASS }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASS: ${{ secrets.RELEASE_KEY_PASS }}
+        run: ./gradlew :app:assembleRelease
+
+      - name: Upload debug APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bidet-phone-debug-${{ github.sha }}
+          path: Android/src/app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Attach release APK to GitHub Release (only on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Android/src/app/build/outputs/apk/release/*.apk
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
