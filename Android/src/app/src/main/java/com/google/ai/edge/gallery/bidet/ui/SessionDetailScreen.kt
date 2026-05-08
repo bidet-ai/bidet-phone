@@ -53,10 +53,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -217,27 +221,33 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
-    val state: StateFlow<SessionDetailUiState> = kotlinx.coroutines.flow.flow {
-        emit(SessionDetailUiState())
-        sessionIdFlow.collect { id ->
+    /**
+     * Phase 4A.1: was a nested-collect (`sessionIdFlow.collect { id ->
+     * sessionDao.observeById(id).collect { ... } }`). Room flows are infinite, so the inner
+     * `.collect` never completed and a subsequent `sessionId` emission could not advance the
+     * outer collector. Refactored to `flatMapLatest`, which cancels the prior inner flow on
+     * each new id and resubscribes — exactly what we want when the user navigates between
+     * sessions while the screen is alive.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val state: StateFlow<SessionDetailUiState> = sessionIdFlow
+        .flatMapLatest { id ->
             if (id.isEmpty()) {
-                emit(SessionDetailUiState())
-                return@collect
-            }
-            sessionDao.observeById(id).collect { row ->
-                emit(
+                flowOf(SessionDetailUiState())
+            } else {
+                sessionDao.observeById(id).map { row ->
                     SessionDetailUiState(
                         session = row,
                         notFound = row == null,
                     )
-                )
+                }
             }
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = SessionDetailUiState(),
-    )
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = SessionDetailUiState(),
+        )
 
     private val _cleanState = MutableStateFlow<TabState>(TabState.Idle)
     val cleanState: StateFlow<TabState> = _cleanState.asStateFlow()
