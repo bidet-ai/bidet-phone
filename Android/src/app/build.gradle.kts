@@ -1,6 +1,6 @@
 /*
  * Copyright 2025 Google LLC
- * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook.
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook, add fetchWhisperModel task hooked into mergeAssets for Phase 3 build-time Whisper-tiny fetch.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -171,4 +171,114 @@ dependencies {
 protobuf {
   protoc { artifact = "com.google.protobuf:protoc:4.26.1" }
   generateProtoTasks { all().forEach { it.plugins { create("java") { option("lite") } } } }
+}
+
+// bidet-ai Phase 3: fetch the Whisper-tiny.en weights at build time. The .bin file is
+// gitignored (75 MB binary); CI fetches on every build and caches the result. The fetch is
+// idempotent — once the file exists with a matching SHA-256 the task is up-to-date.
+//
+// Wire-in: a manual `dependsOn` on mergeDebugAssets / mergeReleaseAssets ensures the asset
+// is in place before APK assembly. We do NOT hook into `assembleDebug` directly (that bug
+// hit Phase 1's banWordCheck — see CI workflow comment).
+val whisperModelUrl =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+val whisperModelSha256 =
+    "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+val whisperModelFile = layout.projectDirectory.file(
+    "src/main/assets/whisper/ggml-tiny.en.bin"
+).asFile
+
+abstract class FetchWhisperModelTask : DefaultTask() {
+    @get:Input
+    abstract val url: Property<String>
+
+    @get:Input
+    abstract val expectedSha256: Property<String>
+
+    @get:OutputFile
+    abstract val outputFile: RegularFileProperty
+
+    @TaskAction
+    fun fetch() {
+        val out = outputFile.get().asFile
+        out.parentFile.mkdirs()
+
+        // Up-to-date check: file exists AND SHA-256 matches.
+        if (out.exists() && out.length() > 0) {
+            val actual = computeSha256(out)
+            if (actual.equals(expectedSha256.get(), ignoreCase = true)) {
+                logger.lifecycle("Whisper model already present + verified: ${out.absolutePath}")
+                return
+            } else {
+                logger.warn(
+                    "Whisper model SHA mismatch (expected ${expectedSha256.get()}, got $actual). " +
+                        "Re-downloading."
+                )
+                out.delete()
+            }
+        }
+
+        logger.lifecycle("Downloading Whisper-tiny.en model from ${url.get()} → ${out.absolutePath}")
+        val tmp = java.io.File(out.parentFile, out.name + ".tmp")
+        try {
+            java.net.URL(url.get()).openStream().use { input ->
+                tmp.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            val actual = computeSha256(tmp)
+            if (!actual.equals(expectedSha256.get(), ignoreCase = true)) {
+                tmp.delete()
+                throw GradleException(
+                    "SHA-256 mismatch for downloaded Whisper model. " +
+                        "Expected ${expectedSha256.get()}, got $actual."
+                )
+            }
+            if (out.exists()) out.delete()
+            if (!tmp.renameTo(out)) {
+                throw GradleException(
+                    "Failed to rename ${tmp.absolutePath} to ${out.absolutePath}"
+                )
+            }
+            logger.lifecycle("Whisper model fetched + verified: ${out.absolutePath}")
+        } catch (t: Throwable) {
+            tmp.delete()
+            throw t
+        }
+    }
+
+    private fun computeSha256(file: java.io.File): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+}
+
+val fetchWhisperModel = tasks.register<FetchWhisperModelTask>("fetchWhisperModel") {
+    group = "bidet"
+    description = "Download + verify Whisper-tiny.en model weights into assets/whisper/."
+    url.set(whisperModelUrl)
+    expectedSha256.set(whisperModelSha256)
+    outputFile.set(whisperModelFile)
+}
+
+// Hook into the asset-merge step so the .bin lands in src/main/assets/whisper/ before AGP
+// reads it. Phase 1 lesson: this is the legitimate kind of task hook (asset-pipeline
+// prerequisite, not a verification gate stapled onto assembleDebug).
+afterEvaluate {
+    listOf(
+        "mergeDebugAssets",
+        "mergeReleaseAssets",
+        "generateDebugAssets",
+        "generateReleaseAssets",
+    ).forEach { taskName ->
+        tasks.findByName(taskName)?.dependsOn(fetchWhisperModel)
+    }
 }
