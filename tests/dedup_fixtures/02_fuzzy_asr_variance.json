@@ -1,0 +1,7 @@
+{
+  "name": "02_fuzzy_asr_variance",
+  "description": "The overlap region is the same words but Whisper produced slightly different ASR for it the second time around (typical ~1 char per 50 char drift). Our fuzzy threshold of <=2 mismatches per 50 chars must catch this.",
+  "prev": "Caesar crossed the Rubicon in forty nine BC, ending the Republic.",
+  "next": "in forty-nine BC ending the Republic. Then the Empire began.",
+  "expected": "Caesar crossed the Rubicon in forty nine BC, ending the Republic. Then the Empire began."
+}

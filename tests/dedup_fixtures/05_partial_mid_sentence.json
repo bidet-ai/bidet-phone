@@ -1,0 +1,7 @@
+{
+  "name": "05_partial_mid_sentence",
+  "description": "Overlap region is a mid-sentence fragment, not a full sentence boundary. The match length should be the longest deterministic suffix-prefix run; cut precisely at that boundary.",
+  "prev": "The amphitheater could hold fifty thousand spectators on a typical",
+  "next": "thousand spectators on a typical day, and the games drew them from miles around.",
+  "expected": "The amphitheater could hold fifty thousand spectators on a typical day, and the games drew them from miles around."
+}

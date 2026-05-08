@@ -1,0 +1,7 @@
+{
+  "name": "03_no_overlap",
+  "description": "Two chunks with no overlap at all (e.g. a long pause swallowed the backbuffer, or different topics). Algorithm must concatenate with a single separating space and not invent an overlap.",
+  "prev": "The Senate convened that morning.",
+  "next": "Meanwhile, the legions marched north.",
+  "expected": "The Senate convened that morning. Meanwhile, the legions marched north."
+}

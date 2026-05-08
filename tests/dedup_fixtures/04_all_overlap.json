@@ -1,0 +1,7 @@
+{
+  "name": "04_all_overlap",
+  "description": "next is entirely a re-transcription of the same audio that ended prev (degenerate case: silence in chunk N+1 caused Whisper to repeat the previous chunk's tail). Algorithm should drop next entirely (or leave only what extends past prev's tail).",
+  "prev": "Augustus reformed the army into a professional standing force.",
+  "next": "into a professional standing force.",
+  "expected": "Augustus reformed the army into a professional standing force."
+}

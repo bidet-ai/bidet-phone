@@ -1,0 +1,7 @@
+{
+  "name": "01_clean_overlap",
+  "description": "Two consecutive chunks with a clean, exact-match overlap region (the last sentence of prev was re-spoken at the start of next, as happens with our 2-second backbuffer).",
+  "prev": "We were talking about Roman currency and how the denarius spread.",
+  "next": "and how the denarius spread. The coins were accepted everywhere.",
+  "expected": "We were talking about Roman currency and how the denarius spread. The coins were accepted everywhere."
+}

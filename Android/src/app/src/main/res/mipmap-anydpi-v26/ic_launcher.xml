@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+ Copyright 2025 Google LLC
+ Modifications Copyright 2026 bidet-ai contributors. Changed: switch foreground to @mipmap/ic_launcher_foreground (bidet-ai mascot PNG generated from branding/bidet-ai_icon.png) and use a soft-blue background.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background>
+    <vector
+        android:width="108dp"
+        android:height="108dp"
+        android:viewportHeight="108"
+        android:viewportWidth="108">
+      <path
+          android:fillColor="#FFE6F0FA"
+          android:pathData="M0 0H108V108H0z" />
+    </vector>
+  </background>
+  <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+  <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
