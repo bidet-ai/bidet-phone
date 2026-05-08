@@ -34,14 +34,24 @@ import androidx.core.app.NotificationCompat
 import com.google.ai.edge.gallery.MainActivity
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine
+import com.google.ai.edge.gallery.bidet.audio.WavConcatenator
 import com.google.ai.edge.gallery.bidet.chunk.ChunkQueue
+import com.google.ai.edge.gallery.bidet.data.BidetSession
+import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
 import com.google.ai.edge.gallery.bidet.transcription.TranscriptionWorker
 import com.google.ai.edge.gallery.bidet.transcription.WhisperEngine
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 /**
@@ -59,7 +69,10 @@ import java.util.UUID
  * The service is bound by the UI for live state access; it also runs as foreground so it
  * survives screen-off and process death.
  */
+@AndroidEntryPoint
 class RecordingService : Service() {
+
+    @Inject lateinit var sessionDao: BidetSessionDao
 
     /**
      * Holder of pipeline objects. Exposed via the [LocalBinder] so the UI can collect from
@@ -84,6 +97,17 @@ class RecordingService : Service() {
     private var pipeline: Pipeline? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var paused: Boolean = false
+
+    /**
+     * Phase 4A: tracks per-recording persistence state. We:
+     *  - create a BidetSession row on startRecording (rawText empty)
+     *  - tail aggregator.rawFlow and `update()` the row as text accrues (so a process kill
+     *    leaves a partial-but-readable row rather than nothing)
+     *  - on stopRecording: concat chunk PCMs into audio.wav, finalize the row with
+     *    endedAtMs / durationSeconds / chunkCount / audioWavPath.
+     */
+    private var sessionStartedAtMs: Long = 0L
+    private var sessionPersistJob: Job? = null
 
     /** Visible to bound clients (the UI). May be null before [startRecording] is called. */
     fun pipeline(): Pipeline? = pipeline
@@ -141,11 +165,54 @@ class RecordingService : Service() {
             whisperEngine = whisperEngine,
             worker = worker,
         )
+
+        // Phase 4A: persist the session so SessionsListScreen can show it immediately and
+        // SessionDetailScreen can restore it later. We insert with empty rawText, then tail
+        // the aggregator and rewrite the row with each new transcript snapshot.
+        sessionStartedAtMs = System.currentTimeMillis()
+        scope.launch {
+            try {
+                sessionDao.insert(
+                    BidetSession(
+                        sessionId = sessionId,
+                        startedAtMs = sessionStartedAtMs,
+                        endedAtMs = null,
+                        durationSeconds = 0,
+                        rawText = "",
+                        chunkCount = 0,
+                    )
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "BidetSession insert failed: ${t.message}", t)
+            }
+        }
+        sessionPersistJob = scope.launch {
+            // Throttle: each emission triggers a single update; aggregator updates ~once per
+            // ~30 sec (chunk emit), so this is cheap. We catch + log; transient I/O failure
+            // shouldn't tear down the recording pipeline.
+            aggregator.rawFlow.collectLatest { text ->
+                try {
+                    val existing = sessionDao.getById(sessionId) ?: return@collectLatest
+                    if (existing.rawText == text) return@collectLatest
+                    sessionDao.update(existing.copy(rawText = text))
+                } catch (t: Throwable) {
+                    Log.w(TAG, "BidetSession rawText update failed: ${t.message}", t)
+                }
+            }
+        }
     }
 
     /** Stop and tear down the pipeline. Safe to call multiple times. */
     fun stopRecording() {
-        pipeline?.let {
+        val activePipeline = pipeline
+        val sessionId = activePipeline?.sessionId
+        val finalRawText = activePipeline?.aggregator?.currentText().orEmpty()
+        val recordingStartedAt = sessionStartedAtMs
+
+        sessionPersistJob?.cancel()
+        sessionPersistJob = null
+
+        activePipeline?.let {
             it.captureEngine.stop()
             it.worker.stop()
             it.chunkQueue.close()
@@ -153,12 +220,67 @@ class RecordingService : Service() {
         }
         pipeline = null
         abandonAudioFocus()
+
+        // Phase 4A: finalize the BidetSession row — concat WAV (file-system I/O on a
+        // background dispatcher), then write endedAtMs / durationSeconds / chunkCount /
+        // audioWavPath. Run on the service scope so the work survives stopForeground.
+        if (sessionId != null && recordingStartedAt > 0L) {
+            scope.launch {
+                finalizeSessionRow(sessionId, recordingStartedAt, finalRawText)
+            }
+        }
+
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Throwable) {
             // ignore
         }
         stopSelf()
+    }
+
+    /**
+     * Phase 4A: concatenate per-chunk PCM files into one playable `audio.wav`, then update
+     * the persisted [BidetSession] row with terminal fields.
+     */
+    private suspend fun finalizeSessionRow(
+        sessionId: String,
+        startedAtMs: Long,
+        finalRawText: String,
+    ) {
+        val endedAtMs = System.currentTimeMillis()
+        val durationSeconds = ((endedAtMs - startedAtMs) / 1000L).toInt().coerceAtLeast(0)
+
+        val (wavPath, chunkCount) = withContext(Dispatchers.IO) {
+            val wav: File? = try {
+                WavConcatenator.concatenateChunksToWav(applicationContext, sessionId)
+            } catch (t: Throwable) {
+                Log.w(TAG, "concatenateChunksToWav threw: ${t.message}", t)
+                null
+            }
+            val chunksDir = applicationContext.getExternalFilesDir(null)
+                ?.let { File(it, "sessions/$sessionId/chunks") }
+            val count = chunksDir?.listFiles { f ->
+                f.isFile && f.name.endsWith(".pcm") && !f.name.endsWith(".tmp")
+            }?.size ?: 0
+            wav?.absolutePath to count
+        }
+
+        try {
+            val existing = sessionDao.getById(sessionId)
+            if (existing != null) {
+                sessionDao.update(
+                    existing.copy(
+                        endedAtMs = endedAtMs,
+                        durationSeconds = durationSeconds,
+                        rawText = finalRawText.ifBlank { existing.rawText },
+                        chunkCount = chunkCount,
+                        audioWavPath = wavPath,
+                    )
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "BidetSession finalize update failed: ${t.message}", t)
+        }
     }
 
     // ---------- foreground notification ----------
