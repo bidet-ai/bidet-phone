@@ -347,14 +347,17 @@ class RecordingService : Service() {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 if (!paused) {
-                    pipeline?.captureEngine?.stop()
+                    // Phase 4A.1: soft-pause. Previous code called captureEngine.stop()/start()
+                    // which reset nextChunkIdx=0 + cleared the pending buffer + backbuffer,
+                    // overwriting `0.pcm`/`1.pcm`/... in the same sessions/<id>/chunks/ dir.
+                    pipeline?.captureEngine?.pause()
                     paused = true
-                    Log.i(TAG, "AudioFocus transient loss — pausing capture.")
+                    Log.i(TAG, "AudioFocus transient loss — soft-pausing capture.")
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 if (paused) {
-                    pipeline?.captureEngine?.start()
+                    pipeline?.captureEngine?.resume()
                     paused = false
                     Log.i(TAG, "AudioFocus gain — resuming capture.")
                 }
