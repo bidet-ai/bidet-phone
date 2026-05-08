@@ -93,19 +93,42 @@ object WavConcatenator {
             return null
         }
 
+        // Phase 4A.1 (#8): the canonical WAV header is 32-bit (`Subchunk2Size` is a uint32
+        // for the data section, with `ChunkSize = 36 + dataLen` also 32-bit). At 16 kHz mono
+        // PCM 16-bit = 32 KB/s, the limit is hit at ≈18.6 hours of audio. Anything past
+        // that overflows when we narrow `Long → Int` and writes a corrupt header. Bidet's
+        // brain-dump use case is 5-15 min, but lectures/podcasts can hit the bound; refuse
+        // to write rather than ship a corrupt WAV. RF64 extension is a Phase 5+ task.
+        if (dataBytesTotal > Int.MAX_VALUE.toLong() - 36L) {
+            Log.w(
+                TAG,
+                "Recording exceeds 32-bit WAV size limit (data=$dataBytesTotal bytes). " +
+                    "Refusing to write a corrupt header. Phase 5+: switch to RF64.",
+            )
+            return null
+        }
+
         sessionDir.mkdirs()
         val tmp = File(sessionDir, "audio.wav.tmp")
         try {
             FileOutputStream(tmp).use { out ->
                 out.write(buildWavHeader(dataBytesTotal.toInt()))
                 chunkFiles.forEachIndexed { i, f ->
-                    val bytes = f.readBytes()
-                    if (i == 0) {
-                        out.write(bytes)
-                    } else {
-                        // Skip the 2-sec backbuffer overlap.
-                        val skip = minOf(backbufferBytes, bytes.size)
-                        out.write(bytes, skip, bytes.size - skip)
+                    // Phase 4A.1 (#11): stream the chunk through a 64 KB buffer instead of
+                    // `f.readBytes()` (which allocates the whole chunk on heap — 960 KB/30 s
+                    // chunk plus 64 KB backbuffer overlap = ~1 MB allocation per chunk on a
+                    // tight memory device).
+                    val skip = if (i == 0) 0L else minOf(backbufferBytes.toLong(), f.length())
+                    f.inputStream().buffered(STREAM_BUFFER_BYTES).use { input ->
+                        if (skip > 0) {
+                            var remaining = skip
+                            while (remaining > 0) {
+                                val skipped = input.skip(remaining)
+                                if (skipped <= 0) break
+                                remaining -= skipped
+                            }
+                        }
+                        input.copyTo(out, bufferSize = STREAM_BUFFER_BYTES)
                     }
                 }
             }
@@ -188,4 +211,7 @@ object WavConcatenator {
     }
 
     const val WAV_HEADER_SIZE: Int = 44
+
+    /** Phase 4A.1: 64 KB streaming buffer for chunk → WAV concat. */
+    private const val STREAM_BUFFER_BYTES: Int = 64 * 1024
 }
