@@ -128,7 +128,12 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
-        stopRecording()
+        // Phase 4A.1: do NOT call stopRecording() here. If the service is being torn down
+        // mid-finalize (e.g. OS shutting us down for memory pressure), stopRecording()'s
+        // launch{} will get cancelled the moment we hit `scope.cancel()` below. The
+        // refactored stopRecording() now handles its own teardown via the launch{} block;
+        // by the time onDestroy() fires there should be no pipeline in flight. Keep
+        // scope.cancel() so any straggler coroutines don't leak past process death.
         scope.cancel()
         super.onDestroy()
     }
@@ -202,7 +207,19 @@ class RecordingService : Service() {
         }
     }
 
-    /** Stop and tear down the pipeline. Safe to call multiple times. */
+    /**
+     * Stop and tear down the pipeline. Safe to call multiple times.
+     *
+     * Phase 4A.1: previous shape called stopForeground + stopSelf eagerly, then launched
+     * finalizeSessionRow on `scope`. If Android tore the service down (long sessions, slow
+     * eMMC, OOM-killer) before WAV concat completed, onDestroy()'s `scope.cancel()` would
+     * abort finalize, leaving `audio.wav.tmp` orphaned and the row's `audioWavPath` null →
+     * Share/Export silently broken.
+     *
+     * Fix: keep the foreground service alive until finalize completes, then tear down on
+     * the Main dispatcher inside the same launch{}. The notification stays visible during
+     * concat so the OS won't reclaim us mid-flush.
+     */
     fun stopRecording() {
         val activePipeline = pipeline
         val sessionId = activePipeline?.sessionId
@@ -221,15 +238,24 @@ class RecordingService : Service() {
         pipeline = null
         abandonAudioFocus()
 
-        // Phase 4A: finalize the BidetSession row — concat WAV (file-system I/O on a
-        // background dispatcher), then write endedAtMs / durationSeconds / chunkCount /
-        // audioWavPath. Run on the service scope so the work survives stopForeground.
         if (sessionId != null && recordingStartedAt > 0L) {
             scope.launch {
-                finalizeSessionRow(sessionId, recordingStartedAt, finalRawText)
+                try {
+                    finalizeSessionRow(sessionId, recordingStartedAt, finalRawText)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "finalizeSessionRow threw: ${t.message}", t)
+                } finally {
+                    withContext(Dispatchers.Main) { tearDownForeground() }
+                }
             }
+        } else {
+            // No active session — tear down immediately.
+            tearDownForeground()
         }
+    }
 
+    /** Phase 4A.1: split out so the finalize-then-stop coroutine has one teardown call. */
+    private fun tearDownForeground() {
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Throwable) {
