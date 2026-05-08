@@ -16,10 +16,14 @@
 
 package com.google.ai.edge.gallery.bidet.ui
 
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -30,13 +34,19 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 
 /**
  * Shared body for the three on-demand tabs (CLEAN / ANALYSIS / FORAI). Renders a Generate
  * button when [TabState.Idle], a spinner when [TabState.Generating], the cached text +
  * Regenerate button when [TabState.Cached], and an error + retry when [TabState.Failed].
+ *
+ * Phase 4A: long-press the cached text → copies to clipboard + shows a brief Toast.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GeneratableTabBody(
     state: TabState,
@@ -44,6 +54,9 @@ fun GeneratableTabBody(
     idleHint: String,
     onGenerate: () -> Unit,
 ) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -60,7 +73,22 @@ fun GeneratableTabBody(
                 CircularProgressIndicator()
             }
             is TabState.Cached -> {
-                Text(state.text)
+                Text(
+                    text = state.text,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = { /* tap is no-op; long-press copies */ },
+                            onLongClick = {
+                                clipboard.setText(AnnotatedString(state.text))
+                                Toast.makeText(
+                                    context,
+                                    "Copied to clipboard",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                        ),
+                )
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onGenerate) { Text("Regenerate") }
             }
