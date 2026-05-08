@@ -18,7 +18,10 @@ package com.google.ai.edge.gallery.bidet.ui
 
 import android.content.Context
 import android.content.Intent
-import android.text.format.DateUtils
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -221,13 +224,13 @@ internal fun previewText(raw: String): String {
     return if (trimmed.length <= PREVIEW_CHARS) trimmed else trimmed.substring(0, PREVIEW_CHARS) + "…"
 }
 
+private val SESSION_START_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault())
+
 internal fun formatStartedAt(startedAtMs: Long): String {
-    // DateUtils.formatDateTime accepts a null Context — it falls back to system locale.
-    return DateUtils.formatDateTime(
-        null,
-        startedAtMs,
-        DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH,
-    )
+    return Instant.ofEpochMilli(startedAtMs)
+        .atZone(ZoneId.systemDefault())
+        .format(SESSION_START_FORMATTER)
 }
 
 internal fun formatDuration(durationSeconds: Int): String {
