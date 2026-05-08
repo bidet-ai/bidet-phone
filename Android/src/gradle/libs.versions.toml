@@ -56,6 +56,9 @@ mlkit-genai-prompt = "1.0.0-beta2"  # Ref: https://developers.google.com/ml-kit/
 whisperJni = "1.7.1"
 okhttp = "4.12.0"
 kotlinxCoroutinesTest = "1.8.1"
+# bidet-ai Phase 4A: Room for session persistence (sessions list + detail).
+# Pinned to a release that supports KSP + Kotlin 2.2 (we already use ksp for moshi-kotlin-codegen).
+room = "2.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -116,6 +119,10 @@ mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", versio
 whisper-jni = { group = "io.github.givimad", name = "whisper-jni", version.ref = "whisperJni" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
+# bidet-ai Phase 4A: Room persistence (sessions list, restore, export).
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

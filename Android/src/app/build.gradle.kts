@@ -152,8 +152,16 @@ dependencies {
   // bidet-ai: Whisper.cpp Android JNI bindings for ASR.
   // Choice rationale: see UPSTREAM_WHISPER.md (whisper-jni 1.7.1, official ggml-tiny.en model).
   implementation(libs.whisper.jni)
-  // bidet-ai: OkHttp for the optional debug Tp3Sender webhook POST.
+  // bidet-ai: OkHttp for the optional debug Tp3Sender webhook POST. Phase 4A also uses
+  // OkHttp for the dynamic Content-Length HEAD fetch in BidetModelProvider.
   implementation(libs.okhttp)
+  // bidet-ai Phase 4A: Room for session persistence (saved brain-dumps + detail screen +
+  // WAV export). Wired into Hilt via BidetDatabaseModule. Phase 4A keeps Room schemas
+  // in-memory (no exportSchema=true) — the entity is small and not yet stable enough
+  // to warrant export-and-version-bump churn during the 16-day pre-contest window.
+  implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.room.ktx)
+  ksp(libs.androidx.room.compiler)
   kapt(libs.hilt.android.compiler)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
