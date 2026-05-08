@@ -186,8 +186,10 @@ protobuf {
 // hit Phase 1's banWordCheck — see CI workflow comment).
 val whisperModelUrl =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+// SHA-256 from the HuggingFace API (model file's LFS oid). Verified 2026-05-08:
+// https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main → ggml-tiny.en.bin
 val whisperModelSha256 =
-    "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+    "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"
 val whisperModelFile = layout.projectDirectory.file(
     "src/main/assets/whisper/ggml-tiny.en.bin"
 ).asFile

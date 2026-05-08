@@ -20,7 +20,7 @@ asset is in place before the APK is assembled. CI fetches once per build;
 locally the file is cached in the working tree.
 
 URL: `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin`
-SHA-256: `be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21`
+SHA-256: `921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`
 
 ## Manual fetch (fallback)
 
@@ -37,7 +37,7 @@ Then verify:
 
 ```bash
 shasum -a 256 Android/src/app/src/main/assets/whisper/ggml-tiny.en.bin
-# expected: be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21
+# expected: 921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
 ```
 
 The auto-fetch task will see the existing file, hash-verify it, and
