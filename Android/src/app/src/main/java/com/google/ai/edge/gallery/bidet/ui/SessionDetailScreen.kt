@@ -294,14 +294,15 @@ class SessionDetailViewModel @Inject constructor(
                 }
                 val now = System.currentTimeMillis()
                 target.value = TabState.Cached(result, now)
-                // Persist back to the BidetSession row so re-opens are instant.
-                val current = sessionDao.getById(sessionId) ?: return@launch
-                val updated = when (kind) {
-                    TabKind.Clean -> current.copy(cleanCached = result)
-                    TabKind.Analysis -> current.copy(analysisCached = result)
-                    TabKind.Forai -> current.copy(foraiCached = result)
+                // Phase 4A.1: persist via column-targeted UPDATE. Previous code did
+                // `getById → copy(field = result) → update(entity)`, which raced sibling
+                // tab-gen flows: simultaneous CLEAN+ANALYSIS taps could both read the same
+                // row, then second-to-finish would clobber first's column with null.
+                when (kind) {
+                    TabKind.Clean -> sessionDao.updateCleanCached(sessionId, result)
+                    TabKind.Analysis -> sessionDao.updateAnalysisCached(sessionId, result)
+                    TabKind.Forai -> sessionDao.updateForaiCached(sessionId, result)
                 }
-                sessionDao.update(updated)
             } catch (t: Throwable) {
                 target.value = TabState.Failed(t.message ?: "Generation failed")
             }

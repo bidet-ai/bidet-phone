@@ -192,14 +192,17 @@ class RecordingService : Service() {
             }
         }
         sessionPersistJob = scope.launch {
-            // Throttle: each emission triggers a single update; aggregator updates ~once per
-            // ~30 sec (chunk emit), so this is cheap. We catch + log; transient I/O failure
-            // shouldn't tear down the recording pipeline.
+            // Throttle: each emission triggers a single column-targeted UPDATE; aggregator
+            // updates ~once per ~30 sec (chunk emit), so this is cheap. We catch + log;
+            // transient I/O failure shouldn't tear down the recording pipeline.
+            //
+            // Phase 4A.1: previously did `getById → copy(rawText = text) → update(entity)`,
+            // which would clobber any column written concurrently by SessionDetailViewModel
+            // (tab-cache writes against the same sessionId during a re-open). The
+            // column-targeted updateRawText is atomic.
             aggregator.rawFlow.collectLatest { text ->
                 try {
-                    val existing = sessionDao.getById(sessionId) ?: return@collectLatest
-                    if (existing.rawText == text) return@collectLatest
-                    sessionDao.update(existing.copy(rawText = text))
+                    sessionDao.updateRawText(sessionId, text)
                 } catch (t: Throwable) {
                     Log.w(TAG, "BidetSession rawText update failed: ${t.message}", t)
                 }
@@ -292,18 +295,24 @@ class RecordingService : Service() {
         }
 
         try {
+            // Phase 4A.1: single column-targeted finalize UPDATE. Previously did
+            // `getById → copy(...) → update(entity)`, which raced the in-flight
+            // updateRawText emissions from sessionPersistJob (since stopRecording cancels
+            // the persist job but a final emission may still be pending the DB write).
+            // We resolve "what rawText to keep" against the latest persisted row before
+            // dispatching the atomic UPDATE.
             val existing = sessionDao.getById(sessionId)
-            if (existing != null) {
-                sessionDao.update(
-                    existing.copy(
-                        endedAtMs = endedAtMs,
-                        durationSeconds = durationSeconds,
-                        rawText = finalRawText.ifBlank { existing.rawText },
-                        chunkCount = chunkCount,
-                        audioWavPath = wavPath,
-                    )
-                )
-            }
+            val resolvedRawText = if (finalRawText.isNotBlank()) finalRawText
+                else existing?.rawText.orEmpty()
+            sessionDao.finalizeSession(
+                sessionId = sessionId,
+                endedAtMs = endedAtMs,
+                durationSeconds = durationSeconds,
+                rawText = resolvedRawText,
+                chunkCount = chunkCount,
+                audioWavPath = wavPath,
+                notes = null, // preserve existing notes (e.g. "permission_denied")
+            )
         } catch (t: Throwable) {
             Log.w(TAG, "BidetSession finalize update failed: ${t.message}", t)
         }

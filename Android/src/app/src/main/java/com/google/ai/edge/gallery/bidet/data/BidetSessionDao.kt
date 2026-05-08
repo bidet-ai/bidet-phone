@@ -51,4 +51,59 @@ interface BidetSessionDao {
 
     @Query("DELETE FROM bidet_sessions WHERE sessionId = :sessionId")
     suspend fun delete(sessionId: String)
+
+    /*
+     * Phase 4A.1: column-targeted updates replace the read-modify-write pattern of
+     * `getById() → entity.copy(field = ...) → update(entity)`. With the old shape, two
+     * concurrent generators (e.g. user taps CLEAN and ANALYSIS at the same time) could
+     * both read the row before either wrote, then second-to-finish would copy from the
+     * stale snapshot and clobber first-to-finish's column. Each targeted UPDATE is a
+     * single atomic SQL statement; concurrent calls to different columns can no longer
+     * interfere.
+     */
+
+    @Query("UPDATE bidet_sessions SET cleanCached = :text WHERE sessionId = :sessionId")
+    suspend fun updateCleanCached(sessionId: String, text: String)
+
+    @Query("UPDATE bidet_sessions SET analysisCached = :text WHERE sessionId = :sessionId")
+    suspend fun updateAnalysisCached(sessionId: String, text: String)
+
+    @Query("UPDATE bidet_sessions SET foraiCached = :text WHERE sessionId = :sessionId")
+    suspend fun updateForaiCached(sessionId: String, text: String)
+
+    @Query("UPDATE bidet_sessions SET rawText = :text WHERE sessionId = :sessionId")
+    suspend fun updateRawText(sessionId: String, text: String)
+
+    /**
+     * Phase 4A.1: terminal write at end-of-recording. One atomic UPDATE replaces the
+     * read/copy/update dance in [com.google.ai.edge.gallery.bidet.service.RecordingService.finalizeSessionRow]
+     * so it doesn't race the in-flight rawText updates from the persist job.
+     */
+    @Query(
+        "UPDATE bidet_sessions SET endedAtMs = :endedAtMs, durationSeconds = :durationSeconds, " +
+            "rawText = :rawText, chunkCount = :chunkCount, audioWavPath = :audioWavPath, " +
+            "notes = COALESCE(:notes, notes) WHERE sessionId = :sessionId"
+    )
+    suspend fun finalizeSession(
+        sessionId: String,
+        endedAtMs: Long,
+        durationSeconds: Int,
+        rawText: String,
+        chunkCount: Int,
+        audioWavPath: String?,
+        notes: String?,
+    )
+
+    /**
+     * Phase 4A.1 — orphan recovery (see fix #7). Backfills `endedAtMs` (best-effort: derived
+     * from `startedAtMs + chunkCount * 30 sec`) and stamps `notes='recovered'` on rows that
+     * were left with `endedAtMs IS NULL` because the service died before finalize ran.
+     */
+    @Query(
+        "UPDATE bidet_sessions " +
+            "SET endedAtMs = startedAtMs + (chunkCount * 30000), " +
+            "    notes = COALESCE(notes, 'recovered') " +
+            "WHERE endedAtMs IS NULL"
+    )
+    suspend fun recoverOrphans()
 }
