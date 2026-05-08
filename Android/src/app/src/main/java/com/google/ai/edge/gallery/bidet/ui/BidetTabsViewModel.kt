@@ -24,6 +24,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,15 +43,36 @@ import java.security.MessageDigest
  *    debug builds; brief §11 BidetSettingsScreen wires the override).
  *  - cache lookups keyed by SHA-256(rawSha + promptVersion + temperature) per brief §7.
  *
- * The aggregator and the [BidetGemmaClient] are injected (not owned). In v0.1 wiring, the UI
- * grabs the aggregator off the bound [com.google.ai.edge.gallery.bidet.service.RecordingService]
- * once the service is live.
+ * Phase 2 wiring: this is a [HiltViewModel]. The [BidetGemmaClient] binding is provided by
+ * [com.google.ai.edge.gallery.bidet.di.BidetModule]. The aggregator is provided lazily —
+ * [com.google.ai.edge.gallery.bidet.ui.BidetMainScreen] binds to [com.google.ai.edge.gallery.bidet.service.RecordingService]
+ * and calls [attachAggregator] once the service's Pipeline is live. Until then the tab
+ * generators no-op (returning a friendly empty-RAW message).
  */
-class BidetTabsViewModel(
-    private val context: Context,
+@HiltViewModel
+class BidetTabsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val gemma: BidetGemmaClient,
-    val aggregator: TranscriptAggregator,
 ) : ViewModel() {
+
+    private var _aggregator: TranscriptAggregator? = null
+    /** Aggregator surface for the RAW tab. Backed by an empty placeholder until [attachAggregator]. */
+    val aggregator: TranscriptAggregator
+        get() = _aggregator ?: PLACEHOLDER_AGGREGATOR
+
+    /** True when the service-owned aggregator has been attached and the RAW tab will be live. */
+    val hasAggregator: Boolean
+        get() = _aggregator != null
+
+    /**
+     * Wire in the live [TranscriptAggregator] supplied by the bound [com.google.ai.edge.gallery.bidet.service.RecordingService].
+     * Idempotent — re-attaching the same instance is a no-op.
+     */
+    fun attachAggregator(a: TranscriptAggregator) {
+        if (_aggregator !== a) {
+            _aggregator = a
+        }
+    }
 
     private val _cleanState = MutableStateFlow<TabState>(TabState.Idle)
     val cleanState: StateFlow<TabState> = _cleanState.asStateFlow()
@@ -168,6 +192,12 @@ class BidetTabsViewModel(
 
         const val DEFAULT_TEMPERATURE: Float = 0.4f
         const val MAX_OUTPUT_TOKENS: Int = 1024
+
+        /**
+         * No-op aggregator returned before the bound service publishes its Pipeline. Empty
+         * `rawFlow` keeps the RAW tab benign rather than NPE-ing.
+         */
+        private val PLACEHOLDER_AGGREGATOR = TranscriptAggregator()
 
         fun promptOverrideKey(tabId: String): Preferences.Key<String> =
             stringPreferencesKey("bidet_prompt_override_$tabId")
