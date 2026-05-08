@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+import java.io.File as JavaFile
+import java.net.URL as JavaURL
+import java.security.MessageDigest
+
 plugins {
   alias(libs.plugins.android.application)
   // Note: set apply to true to enable google-services (requires google-services.json).
@@ -219,9 +223,9 @@ abstract class FetchWhisperModelTask : DefaultTask() {
         }
 
         logger.lifecycle("Downloading Whisper-tiny.en model from ${url.get()} → ${out.absolutePath}")
-        val tmp = java.io.File(out.parentFile, out.name + ".tmp")
+        val tmp = JavaFile(out.parentFile, out.name + ".tmp")
         try {
-            java.net.URL(url.get()).openStream().use { input ->
+            JavaURL(url.get()).openStream().use { input ->
                 tmp.outputStream().use { output ->
                     input.copyTo(output)
                 }
@@ -247,8 +251,8 @@ abstract class FetchWhisperModelTask : DefaultTask() {
         }
     }
 
-    private fun computeSha256(file: java.io.File): String {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
+    private fun computeSha256(file: JavaFile): String {
+        val md = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buf = ByteArray(64 * 1024)
             while (true) {
