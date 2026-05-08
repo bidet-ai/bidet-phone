@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
  Copyright 2025 Google LLC
- Modifications Copyright 2026 bidet-ai contributors. Changed: add FOREGROUND_SERVICE_MICROPHONE permission, declare bidet RecordingService (foregroundServiceType=microphone), label app "Bidet AI".
+ Modifications Copyright 2026 bidet-ai contributors. Changed: add FOREGROUND_SERVICE_MICROPHONE permission, declare bidet RecordingService (foregroundServiceType=microphone), label app "Bidet AI", strip Firebase Analytics + Cloud Messaging entries (telemetry ban; bidet ships zero telemetry).
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -37,13 +37,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
 
-    <!-- Additional permission required for push notification handling -->
-    <!-- Required for resurfacing notifications after boot -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Required for GCM message handling -->
-    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
-    <!-- Required for registering with Chime properly -->
-    <uses-permission android:name="com.google.android.providers.gsf.permission.READ_GSERVICES" />
+    <!-- bidet-ai: Firebase / GCM / Chime permissions stripped (telemetry + push ban). -->
     <!-- Required before JellyBean MR1, optional for newer versions of Android. -->
     <uses-permission android:name="android.permission.GET_ACCOUNTS" />
 
@@ -127,31 +121,7 @@
             android:foregroundServiceType="microphone"
             android:exported="false" />
 
-        <!-- For Firebase Analytics. -->
-        <receiver
-            android:name="com.google.android.gms.measurement.AppMeasurementReceiver"
-            android:enabled="true"
-            android:exported="false" />
-        <service android:name="com.google.android.gms.measurement.AppMeasurementService"
-            android:enabled="true"
-            android:exported="false" />
-        <service
-            android:name="com.google.android.gms.measurement.AppMeasurementJobService"
-            android:enabled="true"
-            android:exported="false"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
-
-        <service
-            android:name=".GalleryFcmMessagingService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
-            </intent-filter>
-        </service>
-
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="gallery_high_priority_push_channel" />
+        <!-- bidet-ai: Firebase Analytics + AppMeasurement + Cloud Messaging entries stripped (zero-telemetry). -->
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <uses-native-library android:name="libOpenCL.so" android:required="false"/>
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />

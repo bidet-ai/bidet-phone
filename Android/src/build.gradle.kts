@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Google LLC
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: drop the google-services plugin alias (Phase 4A.1 zero-telemetry — Firebase Analytics + Cloud Messaging stripped).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +18,7 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
   alias(libs.plugins.android.application) apply false
-  alias(libs.plugins.google.services) apply false
+  // bidet-ai Phase 4A.1: google-services plugin alias removed (zero-telemetry).
   alias(libs.plugins.kotlin.android) apply false
   alias(libs.plugins.kotlin.compose) apply false
   alias(libs.plugins.hilt.application) apply false

@@ -1,7 +1,9 @@
 # Modifications Copyright 2026 bidet-ai contributors. Changed: drop netOpenidAppauth (HF OAuth
 # stripped), pin litertlm ≥0.10.1 (currently 0.11.0 — keep), add whisper-jni for ASR, add
 # okhttp for the optional debug Tp3Sender webhook, add datastore-preferences + lifecycle-runtime-
-# compose + kotlinx-coroutines-test for the bidet/* code and tests.
+# compose + kotlinx-coroutines-test for the bidet/* code and tests, Phase 4A.1 strip firebase-bom
+# + firebase-analytics + firebase-messaging libraries + the google-services plugin alias
+# (zero-telemetry hard rule).
 [versions]
 agp = "8.8.2"
 kotlin = "2.2.0"
@@ -38,8 +40,7 @@ hilt = "2.57.2"
 hiltNavigation = "1.3.0"
 ossLicenses = "0.10.6"
 playServicesOssLicenses = "17.1.0"
-googleService = "4.4.3"
-firebaseBom = "33.16.0"
+# bidet-ai Phase 4A.1: googleService + firebaseBom versions removed (zero-telemetry).
 exifinterface = "1.4.1"
 securityCrypto = "1.1.0"
 # Restored 2026-05-08: brief stripped these but upstream Gallery's ProjectConfig.kt,
@@ -106,11 +107,8 @@ hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", ve
 hilt-android-testing = { module = "com.google.dagger:hilt-android-testing", version.ref = "hilt" }
 hilt-android-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
 play-services-oss-licenses = { module = "com.google.android.gms:play-services-oss-licenses", version.ref = "playServicesOssLicenses"}
-firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-# When using the Firebase BoM, you don't specify versions in Firebase
-# library dependencies.
-firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
-firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+# bidet-ai Phase 4A.1: firebase-bom / firebase-analytics / firebase-messaging libraries removed
+# (zero-telemetry hard rule). play-services-oss-licenses is NOT a Firebase dep.
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshi" }
 moshi-kotlin-codegen = { group = "com.squareup.moshi", name = "moshi-kotlin-codegen", version.ref = "moshi" }
@@ -132,5 +130,5 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 protobuf = {id = "com.google.protobuf", version.ref = "protobuf"}
 hilt-application = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 oss-licenses = {id = "com.google.android.gms.oss-licenses-plugin", version.ref = "ossLicenses"}
-google-services = { id = "com.google.gms.google-services", version.ref = "googleService" }
+# bidet-ai Phase 4A.1: google-services plugin alias removed (zero-telemetry).
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
