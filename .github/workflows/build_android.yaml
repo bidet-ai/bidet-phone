@@ -20,8 +20,9 @@ on:
   pull_request:
     # Phase 2 stacks PRs onto feat/v0.1-phase-1 until Phase 1 lands on main;
     # CI fires for PRs against either base so each phase gets a green check
-    # before the parent phase merges.
-    branches: [main, "feat/v0.1-phase-*"]
+    # before the parent phase merges. The `fix/v0.1-phase-*` glob lets stacked
+    # cleanups (e.g. Phase 4A.2 atop Phase 4A.1) get CI before the parent merges.
+    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*"]
 
 jobs:
   build:

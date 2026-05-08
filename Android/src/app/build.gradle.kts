@@ -144,10 +144,10 @@ dependencies {
   implementation(libs.hilt.android)
   implementation(libs.hilt.navigation.compose)
   implementation(libs.play.services.oss.licenses)
-  // bidet-ai Phase 4A.1: firebase-bom + firebase-analytics + firebase-messaging removed
-  // (zero-telemetry hard rule). Analytics.kt is gutted to a no-op handle, FcmMessagingService
-  // deleted, manifest entries stripped. play-services-oss-licenses is NOT a Firebase dep so
-  // it stays.
+  // bidet-ai Phase 4A.1+4A.2: firebase-bom + firebase-analytics + firebase-messaging removed
+  // (zero-telemetry hard rule). 4A.2 deleted the Analytics.kt stub + every upstream telemetry
+  // call site; FcmMessagingService deleted (4A.1); manifest entries stripped (4A.1).
+  // play-services-oss-licenses is NOT a Firebase dep so it stays.
   // bidet-ai Phase 4A.1: androidx-documentfile is wired explicitly because upstream
   // Gallery's customtasks/agentchat/SkillManagerViewModel.kt imports
   // androidx.documentfile.provider.DocumentFile (used to resolve transitively through
