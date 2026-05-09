@@ -96,14 +96,15 @@ class RecordingCapWatcherTest {
     @Test
     fun visual_warn_fires_exactly_once_on_rising_edge() = runTest(StandardTestDispatcher()) {
         val sink = FakeSink()
-        // Drive the watcher's simulated wall-clock from `currentTime` (the test scheduler
-        // owns it) and arrange startedAt so virtual-time = elapsed-time. We sit just below
-        // 40:00 by setting startedAt to 1ms BEFORE WARN_VISUAL_MS — virtual-time-0 evaluates
-        // to elapsed=39:59.999, so the first iteration is below the threshold (no vibrate).
-        // Then we advance past the boundary and verify the rising-edge latch.
+        // Test driver explicitly steps the simulated wall-clock alongside the test
+        // dispatcher's virtual clock. We use a manual AtomicLong rather than reading
+        // testScheduler.currentTime so this test compiles against any kotlinx-coroutines-test
+        // version (1.8.x extension-property visibility quirks aside) — and the test stays
+        // entirely in our control: every advanceTimeBy(N) is paired with an addAndGet(N).
+        val virtualNow = java.util.concurrent.atomic.AtomicLong(0)
         val watcher = RecordingCapWatcher(
             sink = sink,
-            clock = { currentTime },
+            clock = { virtualNow.get() },
             pollIntervalMs = 200L,
         )
         val job = watcher.start(
@@ -125,6 +126,7 @@ class RecordingCapWatcherTest {
 
         // Cross the threshold. One 200 ms poll-interval tick is enough for the watcher to
         // re-read the clock and fire vibrateOnce on the rising edge.
+        virtualNow.addAndGet(500)
         advanceTimeBy(500L)
         runCurrent()
         assertEquals(
@@ -135,6 +137,7 @@ class RecordingCapWatcherTest {
 
         // Hold (still in the visual-warn-but-not-audible window) for many more polling
         // ticks — vibrate must NOT re-fire (latched).
+        virtualNow.addAndGet(5_000)
         advanceTimeBy(5_000L)
         runCurrent()
         assertEquals(
@@ -149,15 +152,17 @@ class RecordingCapWatcherTest {
     @Test
     fun ten_beeps_emitted_between_audibleStart_and_hardCap() = runTest(StandardTestDispatcher()) {
         val sink = FakeSink()
-        // Drive the watcher's "what time is it?" off the test scheduler's virtual clock, so
-        // every advanceTimeBy(BEEP_INTERVAL_MS) BOTH satisfies the watcher's `delay(1000)`
-        // AND moves the simulated wall-clock forward by 1 second. The watcher reads
-        // `clock() - startedAtMs` — by setting startedAtMs to (-WARN_AUDIBLE_START_MS) we
-        // make the first read at virtual-time-0 evaluate to exactly 44:50:000, i.e. the
-        // first iteration of the loop is the FIRST tick of the audible-warn window.
+        // Step the watcher's simulated wall-clock alongside the test scheduler's virtual
+        // clock. We use a manual AtomicLong rather than reading testScheduler.currentTime
+        // because TestScope's currentTime/testScheduler accessors are extension properties
+        // that don't always resolve cleanly inside a non-receiver lambda passed as a clock.
+        // startedAt is anchored to (-WARN_AUDIBLE_START_MS) so virtualNow=0 evaluates to
+        // elapsed=44:50:000 — the first iteration is the FIRST tick of the audible-warn
+        // window.
+        val virtualNow = java.util.concurrent.atomic.AtomicLong(0)
         val watcher = RecordingCapWatcher(
             sink = sink,
-            clock = { currentTime },
+            clock = { virtualNow.get() },
             pollIntervalMs = 200L,
         )
         val job = watcher.start(
@@ -165,14 +170,16 @@ class RecordingCapWatcherTest {
             startedAtMs = -RecordingCaps.WARN_AUDIBLE_START_MS,
         )
 
-        // Pump the scheduler enough virtual time to cover the 10-second beep window plus
-        // a little slop so the post-beep tick that evaluates hasReachedHardCap fires.
-        // BEEP_INTERVAL_MS * 10 + 100ms covers the 10 beeps + the next-iteration clock read
-        // that observes elapsed >= HARD_CAP_MS and triggers onHardCapReached. After the
-        // hard-cap iteration breaks the loop the watcher coroutine terminates, so a
-        // bounded advanceTimeBy + runCurrent is sufficient — no risk of advanceUntilIdle
-        // pumping forever (the loop has actually stopped by then).
-        advanceTimeBy(RecordingCaps.BEEP_INTERVAL_MS * 10 + 100)
+        // Step the simulated wall-clock + the dispatcher's virtual clock together,
+        // BEEP_INTERVAL_MS at a time. After 10 increments we're at HARD_CAP_MS; the
+        // watcher's next iteration breaks via onHardCapReached and terminates. The 100 ms
+        // slop after the loop gives that final iteration room to read the (now hard-cap-
+        // passed) clock and fire the cap.
+        repeat(10) {
+            virtualNow.addAndGet(RecordingCaps.BEEP_INTERVAL_MS)
+            advanceTimeBy(RecordingCaps.BEEP_INTERVAL_MS)
+        }
+        advanceTimeBy(100)
         runCurrent()
 
         assertEquals(
@@ -191,9 +198,10 @@ class RecordingCapWatcherTest {
     @Test
     fun early_stop_cancels_beep_coroutine_before_10_beeps() = runTest(StandardTestDispatcher()) {
         val sink = FakeSink()
+        val virtualNow = java.util.concurrent.atomic.AtomicLong(0)
         val watcher = RecordingCapWatcher(
             sink = sink,
-            clock = { currentTime },
+            clock = { virtualNow.get() },
             pollIntervalMs = 200L,
         )
         val job = watcher.start(
@@ -201,12 +209,15 @@ class RecordingCapWatcherTest {
             startedAtMs = -RecordingCaps.WARN_AUDIBLE_START_MS,
         )
 
-        // Drive 3 seconds of virtual time — enough for several beeps but well short of the
-        // hard-cap. We use runCurrent() (NOT advanceUntilIdle()) because the watcher loops
-        // infinitely until cancel-or-hard-cap; advanceUntilIdle would happily run all the
-        // way through to the 10th beep + hard-cap in this test, defeating the "stopped
-        // early" contract.
-        advanceTimeBy(3 * RecordingCaps.BEEP_INTERVAL_MS + 50)
+        // Drive 3 BEEP_INTERVAL_MS ticks worth of simulated time — enough for several beeps
+        // but well short of the hard-cap. We use runCurrent() (NOT advanceUntilIdle()) because
+        // the watcher loops infinitely until cancel-or-hard-cap; advanceUntilIdle would
+        // happily run all the way through to the 10th beep + hard-cap in this test,
+        // defeating the "stopped early" contract.
+        repeat(3) {
+            virtualNow.addAndGet(RecordingCaps.BEEP_INTERVAL_MS)
+            advanceTimeBy(RecordingCaps.BEEP_INTERVAL_MS)
+        }
         runCurrent()
         val beepsBeforeCancel = sink.beepCount.get()
         assertTrue(
@@ -223,6 +234,7 @@ class RecordingCapWatcherTest {
         // After cancel, advancing the clock further must NOT produce more beeps. This is
         // the spec contract: "make sure beeps STOP if the user taps STOP early". advanceUntilIdle
         // is safe here — the cancelled job has no pending tasks, so it returns immediately.
+        virtualNow.addAndGet(20 * RecordingCaps.BEEP_INTERVAL_MS)
         advanceTimeBy(20 * RecordingCaps.BEEP_INTERVAL_MS)
         advanceUntilIdle()
 
@@ -249,10 +261,12 @@ class RecordingCapWatcherTest {
         val sink = FakeSink()
         // Common case: a normal short session ends well before 40:00. The watcher must
         // run + cancel cleanly with zero side-effects. We simulate "5 minutes elapsed" by
-        // anchoring startedAt to -5min so virtual-time-0 = elapsed-5min.
+        // anchoring startedAt to -5min so virtualNow=0 = elapsed-5min, well below the
+        // WARN_VISUAL_MS threshold so the watcher just polls without firing anything.
+        val virtualNow = java.util.concurrent.atomic.AtomicLong(0)
         val watcher = RecordingCapWatcher(
             sink = sink,
-            clock = { currentTime },
+            clock = { virtualNow.get() },
             pollIntervalMs = 100L,
         )
         val job = watcher.start(
@@ -260,6 +274,7 @@ class RecordingCapWatcherTest {
             startedAtMs = -(5L * 60 * 1000),
         )
 
+        virtualNow.addAndGet(10_000)
         advanceTimeBy(10_000L)
         runCurrent()
         job.cancelAndJoin()
