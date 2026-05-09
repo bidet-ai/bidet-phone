@@ -51,6 +51,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -100,6 +103,27 @@ class RecordingService : Service() {
     private var pipeline: Pipeline? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var paused: Boolean = false
+
+    /**
+     * 2026-05-09 (Bug B fix): observable status for the UI.
+     *
+     * Replaces the prior pattern where the Composable read `pipeline()` once via
+     * ServiceConnection.onServiceConnected — that callback only fires at first bind
+     * (before any pipeline exists), so a tap-Record after the bind never propagated
+     * back to the UI and the recording UI never appeared.
+     *
+     * `statusFlow` emits whenever startRecording / stopRecording flips state. The
+     * `startedAtMs` field drives the live timer in the recording header.
+     */
+    data class Status(
+        val isRecording: Boolean,
+        val sessionId: String?,
+        val startedAtMs: Long,
+        val pipeline: Pipeline?,
+    )
+
+    private val _statusFlow = MutableStateFlow(Status(false, null, 0L, null))
+    val statusFlow: StateFlow<Status> = _statusFlow.asStateFlow()
 
     /**
      * Phase 4A: tracks per-recording persistence state. We:
@@ -192,6 +216,15 @@ class RecordingService : Service() {
         // SessionDetailScreen can restore it later. We insert with empty rawText, then tail
         // the aggregator and rewrite the row with each new transcript snapshot.
         sessionStartedAtMs = System.currentTimeMillis()
+
+        // Bug B (2026-05-09): emit on the status flow so the UI's collectAsState fires and
+        // re-composes into the recording-active screen.
+        _statusFlow.value = Status(
+            isRecording = true,
+            sessionId = sessionId,
+            startedAtMs = sessionStartedAtMs,
+            pipeline = pipeline,
+        )
         scope.launch {
             try {
                 sessionDao.insert(
@@ -257,6 +290,10 @@ class RecordingService : Service() {
         }
         pipeline = null
         abandonAudioFocus()
+
+        // Bug B (2026-05-09): emit recorded-stopped state so the UI flips back to the
+        // welcome screen. The session row finalize keeps running on `scope` below.
+        _statusFlow.value = Status(false, null, 0L, null)
 
         if (sessionId != null && recordingStartedAt > 0L) {
             scope.launch {

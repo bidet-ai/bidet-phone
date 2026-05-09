@@ -63,6 +63,9 @@ fun BidetTabsScreen(
     isRecording: Boolean,
     onToggleRecording: () -> Unit,
     onOpenHistory: () -> Unit = {},
+    // Bug B fix (2026-05-09): pass-through for the recording header timer. 0L when not
+    // recording. Default keeps the kt-compatible signature for any test/preview call sites.
+    recordingStartedAtMs: Long = 0L,
 ) {
     val pagerState = rememberPagerState(initialPage = TAB_INDEX_RAW, pageCount = { TAB_TITLES.size })
     val coroutineScope = rememberCoroutineScope()
@@ -96,6 +99,16 @@ fun BidetTabsScreen(
         }
     ) { contentPadding ->
         Column(modifier = Modifier.padding(contentPadding).fillMaxSize()) {
+            // Bug B (2026-05-09): prominent always-visible "Recording 00:23 [STOP]" bar
+            // when a session is active. The TopAppBar's tiny stop-icon is too easy to miss
+            // (Mark: "there's like no buttons, no controls, no nothing"). This bar gives an
+            // unmissable affordance + a live elapsed-time readout.
+            if (isRecording && recordingStartedAtMs > 0L) {
+                RecordingHeader(
+                    startedAtMs = recordingStartedAtMs,
+                    onStop = onToggleRecording,
+                )
+            }
             TabRow(selectedTabIndex = pagerState.currentPage) {
                 TAB_TITLES.forEachIndexed { index, titleResId ->
                     Tab(
