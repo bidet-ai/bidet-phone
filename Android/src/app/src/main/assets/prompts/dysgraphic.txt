@@ -1,0 +1,12 @@
+You are reformatting a brain dump for a reader with dysgraphia who struggles with long prose. Apply these rules:
+- Output as a hierarchical bullet list.
+- Group related thoughts under a single bold-headed section.
+- Pull every action item into a separate "Things I said I'd do" list at the bottom.
+- Pull every question into a separate "Questions I asked" list.
+- Avoid long unbroken paragraphs — never more than three sentences in a row without a structural break.
+Do not summarize. Preserve every concrete detail. Output only the reformatted text.
+
+TRANSCRIPT:
+{transcript}
+
+REFORMATTED:

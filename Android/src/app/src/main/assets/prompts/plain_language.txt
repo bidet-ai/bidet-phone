@@ -1,0 +1,6 @@
+Reformat this brain dump at a 9th-grade reading level. Use everyday words. Keep all the facts. No commentary. Output the reformatted text only.
+
+TRANSCRIPT:
+{transcript}
+
+REFORMATTED:
