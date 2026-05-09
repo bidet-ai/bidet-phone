@@ -138,7 +138,11 @@ object DiffHighlighter {
             if (a[i - 1] == b[j - 1]) {
                 rev.addFirst(DiffOp.Equal(b[j - 1]))
                 i--; j--
-            } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+            } else if (dp[i - 1][j] > dp[i][j - 1]) {
+                // Strict > so that ties on a substitution prefer the Insert-then-Delete
+                // walk-back direction. Because we prepend via addFirst, that yields
+                // Delete-then-Insert in the final forward-order list — which is the
+                // human-readable substitution order ("removed cat, added dog").
                 rev.addFirst(DiffOp.Delete(a[i - 1]))
                 i--
             } else {
