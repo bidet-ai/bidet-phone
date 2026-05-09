@@ -71,13 +71,6 @@ android {
     ndk {
       abiFilters += "arm64-v8a"
     }
-    externalNativeBuild {
-      cmake {
-        // CMake reads our CMakeLists.txt which drives whisper.cpp's CMake from a submodule
-        // FetchContent. Args here are forwarded to that build.
-        arguments += listOf("-DANDROID_STL=c++_shared")
-      }
-    }
   }
 
   // bidet-ai 2026-05-08: NDK pinned to a recent stable that supports arm64-v8a fp16
