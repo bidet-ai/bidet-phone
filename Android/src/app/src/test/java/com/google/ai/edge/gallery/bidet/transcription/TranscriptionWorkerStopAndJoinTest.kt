@@ -23,16 +23,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.junit.After
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -54,17 +52,23 @@ import org.junit.Test
  *  [TranscriptionWorker.stopAndJoin] cancels the consumer AND awaits the in-flight
  *  handleAudio (via Job.join). Once it returns, the caller can safely close the engine.
  *
+ * Why we don't use `runTest` + `StandardTestDispatcher` here:
+ *  [TranscriptionWorker.handleAudio] does `withContext(NonCancellable + Dispatchers.Default)`
+ *  — that switches to the real Default thread pool. `runTest`'s virtual scheduler can't
+ *  see those continuations, so `advanceUntilIdle()` doesn't drive them and the test
+ *  surfaces a flaky "transcribe should be in flight" assertion. Real dispatchers + real
+ *  time + bounded polling is the right tool. Polls are bounded at 5 s wall-clock so a
+ *  regression that hangs forever fails fast in CI rather than timing out the whole runner.
+ *
  * What this test pins:
  *  1. With a long-running fake transcribe, calling stopAndJoin() suspends until the
  *     in-flight transcribe completes — which is the correctness property the fix delivers.
  *  2. After stopAndJoin() returns, the in-flight transcribe is *not* mid-flight any more
- *     (the engine can be closed safely). We assert via a flag the fake flips to true on
- *     entry and false on exit; stopAndJoin must not return while the flag is true.
+ *     (the engine can be closed safely).
  *  3. After stopAndJoin() returns, the worker's job is null so a follow-up start() can
  *     spawn a fresh consumer (idempotency contract for re-records in the same process).
  *  4. stopAndJoin() is a no-op when the worker was never started.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
 class TranscriptionWorkerStopAndJoinTest {
 
     /**
@@ -94,15 +98,25 @@ class TranscriptionWorkerStopAndJoinTest {
         }
     }
 
-    @After
-    fun tearDown() {
-        // Each runTest builds its own scope; nothing to clean up at the class level.
+    /**
+     * Bounded poll-until-true with a hard wall-clock cap. Sleeps in 5 ms increments so
+     * tests that need a tight assertion window aren't paying long tail latency.
+     *
+     * Returns true if the predicate became true within [timeoutMs], false on timeout.
+     */
+    private suspend fun waitUntil(timeoutMs: Long, predicate: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (predicate()) return true
+            delay(5)
+        }
+        return predicate()
     }
 
     @Test
-    fun stopAndJoin_awaitsInFlightTranscribe_thenReleasesJob() = runTest {
-        val testDispatcher = StandardTestDispatcher(testScheduler)
-        val workerScope = CoroutineScope(SupervisorJob() + testDispatcher)
+    fun stopAndJoin_awaitsInFlightTranscribe_thenReleasesJob() = runBlocking {
+        // Real dispatchers — see class kdoc for why runTest doesn't work here.
+        val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         val engine = GatedFakeEngine()
         val queue = ChunkQueue()
@@ -129,26 +143,24 @@ class TranscriptionWorkerStopAndJoinTest {
                 )
             )
 
-            // Let the consumer collect the chunk and enter the gated transcribe.
-            advanceUntilIdle()
+            // Wait for the consumer to enter the gated transcribe (real-time bounded).
             assertTrue(
                 "Transcribe should be in flight after the worker collects the first chunk; " +
                     "if this assertion fires the test setup is wrong, not the fix.",
-                engine.transcribeInFlight.get(),
+                waitUntil(timeoutMs = 5_000L) { engine.transcribeInFlight.get() },
             )
 
             // Kick off stopAndJoin in another coroutine + observe completion ordering.
             val stopAndJoinDone = AtomicBoolean(false)
-            launch {
+            val stopJob = launch(Dispatchers.Default) {
                 worker.stopAndJoin()
                 stopAndJoinDone.set(true)
             }
 
-            // Drain queued continuations — stopAndJoin should NOT have completed yet because
-            // the gated transcribe hasn't been resumed. This is the bug we're fixing: under
-            // the old `stop()` (cancel-only) this would unblock immediately and the caller
-            // would race into close() against an in-flight transcribe.
-            advanceUntilIdle()
+            // Give the stopAndJoin coroutine a real-time slice to enter the join. It
+            // should NOT have completed because the gated transcribe hasn't been resumed
+            // — that's the F1.1 correctness property.
+            delay(200)
             assertFalse(
                 "stopAndJoin must NOT return while a transcribe is still in flight — that's " +
                     "the F1.1 correctness property. If this fires, stopAndJoin probably " +
@@ -163,12 +175,14 @@ class TranscriptionWorkerStopAndJoinTest {
             // Release the gate — transcribe completes, the worker's collect resumes, the
             // join unblocks, stopAndJoin returns.
             engine.gate.complete("hello")
-            advanceUntilIdle()
 
+            // Wait for stopAndJoin to return.
             assertTrue(
                 "stopAndJoin should return AFTER the in-flight transcribe finishes.",
-                stopAndJoinDone.get(),
+                waitUntil(timeoutMs = 5_000L) { stopAndJoinDone.get() },
             )
+            stopJob.join()
+
             assertFalse(
                 "Once stopAndJoin returns, no transcribe is in flight — caller can safely " +
                     "close the engine. This is the use-after-free we're closing.",
@@ -187,9 +201,8 @@ class TranscriptionWorkerStopAndJoinTest {
     }
 
     @Test
-    fun stopAndJoin_isNoOpWhenNotStarted() = runTest {
-        val testDispatcher = StandardTestDispatcher(testScheduler)
-        val workerScope = CoroutineScope(SupervisorJob() + testDispatcher)
+    fun stopAndJoin_isNoOpWhenNotStarted() = runBlocking {
+        val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         val engine = GatedFakeEngine()
         val queue = ChunkQueue()
@@ -215,9 +228,8 @@ class TranscriptionWorkerStopAndJoinTest {
     }
 
     @Test
-    fun stopAndJoin_idempotent_onSecondCall() = runTest {
-        val testDispatcher = StandardTestDispatcher(testScheduler)
-        val workerScope = CoroutineScope(SupervisorJob() + testDispatcher)
+    fun stopAndJoin_idempotent_onSecondCall() = runBlocking {
+        val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         val engine = GatedFakeEngine()
         val queue = ChunkQueue()
@@ -230,23 +242,18 @@ class TranscriptionWorkerStopAndJoinTest {
         )
         try {
             assertTrue(worker.start())
-            // No chunks queued — the worker's collect simply suspends on the queue.
-            advanceUntilIdle()
-
-            worker.stopAndJoin()
-            // Second call must be a no-op (no in-flight job to join). Pinned because the
-            // RecordingService teardown path is "safe to call multiple times" per kdoc, and
-            // a careless implementation could try to join on a null reference.
-            worker.stopAndJoin()
+            // No chunks queued — give the worker's collect a moment to suspend on the
+            // queue, then stop. Bounded by withTimeoutOrNull so a regression that
+            // hangs forever fails fast.
+            withTimeoutOrNull(2_000L) {
+                worker.stopAndJoin()
+                // Second call must be a no-op (no in-flight job to join). Pinned because
+                // RecordingService teardown is "safe to call multiple times" per kdoc;
+                // a careless implementation could try to join on a null reference.
+                worker.stopAndJoin()
+            } ?: error("stopAndJoin/stopAndJoin idempotent path hung past 2s")
         } finally {
             workerScope.cancel()
         }
     }
-
-    /**
-     * Bridge: [delay] is unused but the import keeps IntelliJ from auto-trimming when
-     * future tests in this file need it. Trimmed at the next clean-up pass if still unused.
-     */
-    @Suppress("unused")
-    private suspend fun delayMillis(ms: Long) = delay(ms)
 }
