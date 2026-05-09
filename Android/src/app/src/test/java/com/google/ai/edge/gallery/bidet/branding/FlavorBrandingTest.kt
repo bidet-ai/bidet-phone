@@ -16,7 +16,6 @@
 
 package com.google.ai.edge.gallery.bidet.branding
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -42,15 +41,15 @@ import java.io.File
 class FlavorBrandingTest {
 
     private val moduleDir: File by lazy {
-        // Tests run with cwd = Android/src/app, so walking up two levels lands at Android/src
-        // and the build script is at Android/src/app/build.gradle.kts. Allow either cwd
-        // (depending on how the test runner is invoked from CI vs local).
+        // Tests run with cwd = Android/src/app under Gradle. Search a small set of relative
+        // candidates in case the runner invokes from somewhere else (IDE, root project).
         val candidates = listOf(
             File("build.gradle.kts"),
             File("app/build.gradle.kts"),
             File("../build.gradle.kts"),
         )
-        candidates.first { it.exists() }.parentFile.absoluteFile
+        val matched = candidates.first { it.exists() }.absoluteFile
+        matched.parentFile ?: error("build.gradle.kts has no parent dir: $matched")
     }
 
     private val buildScript: String by lazy {
@@ -170,10 +169,5 @@ class FlavorBrandingTest {
             """create\("gemma"\)\s*\{[^}]*?resValue\(\s*"string"\s*,\s*"bidet_app_name_flavor"\s*,\s*"([^"]+)"\s*\)""",
             RegexOption.DOT_MATCHES_ALL,
         )
-
-        @Suppress("unused")
-        private fun assertEqualsLocal(expected: String, actual: String) {
-            assertEquals(expected, actual)
-        }
     }
 }
