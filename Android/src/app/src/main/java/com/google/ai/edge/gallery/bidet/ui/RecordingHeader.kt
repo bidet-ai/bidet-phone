@@ -24,6 +24,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -55,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.bidet.service.RecordingCapTimer
 import kotlinx.coroutines.delay
 
 /**
@@ -87,8 +89,19 @@ fun RecordingHeader(
         }
     }
 
-    val elapsedSec = (((nowMs - startedAtMs).coerceAtLeast(0L)) / 1000L).toInt()
+    val elapsedMs = (nowMs - startedAtMs).coerceAtLeast(0L)
+    val elapsedSec = (elapsedMs / 1000L).toInt()
     val timer = "%d:%02d".format(elapsedSec / 60, elapsedSec % 60)
+
+    // 2026-05-09: cap-watcher visual half. The actual side-effects (vibrate, beep,
+    // auto-stop) live in RecordingService.RecordingCapWatcher; the header reads the same
+    // RecordingCapTimer.tick result purely to drive the "X:XX remaining" subtitle that
+    // appears at WARN_VISUAL_MS (40:00) and counts down to 0 at HARD_CAP_MS (45:00).
+    val capTick = RecordingCapTimer.tick(elapsedMs)
+    val countdownLabel = if (capTick.hasReachedVisualWarn) {
+        val remSec = capTick.remainingSeconds
+        "%d:%02d remaining".format(remSec / 60, remSec % 60)
+    } else null
 
     val infinite = rememberInfiniteTransition(label = "recording-pulse")
     val pulseAlpha by infinite.animateFloat(
@@ -101,48 +114,58 @@ fun RecordingHeader(
         label = "pulse",
     )
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.errorContainer)
             .padding(horizontal = 16.dp, vertical = if (prominent) 16.dp else 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Pulsing red dot
-        Spacer(
-            modifier = Modifier
-                .size(if (prominent) 16.dp else 12.dp)
-                .alpha(pulseAlpha)
-                .clip(CircleShape)
-                .background(Color(0xFFE53935)),
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "Recording",
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = if (prominent) 18.sp else 16.sp,
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = timer,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            fontSize = if (prominent) 18.sp else 16.sp,
-        )
-        Spacer(modifier = Modifier.width(0.dp).weight(1f))
-        Button(
-            onClick = onStop,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = MaterialTheme.colorScheme.onError,
-            ),
-        ) {
-            Icon(
-                Icons.Filled.Stop,
-                contentDescription = stringResource(R.string.bidet_stop_button),
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Pulsing red dot
+            Spacer(
+                modifier = Modifier
+                    .size(if (prominent) 16.dp else 12.dp)
+                    .alpha(pulseAlpha)
+                    .clip(CircleShape)
+                    .background(Color(0xFFE53935)),
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("STOP", fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Recording",
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = if (prominent) 18.sp else 16.sp,
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = timer,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontSize = if (prominent) 18.sp else 16.sp,
+            )
+            Spacer(modifier = Modifier.width(0.dp).weight(1f))
+            Button(
+                onClick = onStop,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
+                Icon(
+                    Icons.Filled.Stop,
+                    contentDescription = stringResource(R.string.bidet_stop_button),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("STOP", fontWeight = FontWeight.Bold)
+            }
+        }
+        if (countdownLabel != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = countdownLabel,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontSize = if (prominent) 14.sp else 12.sp,
+                modifier = Modifier.padding(start = if (prominent) 26.dp else 22.dp),
+            )
         }
     }
 }

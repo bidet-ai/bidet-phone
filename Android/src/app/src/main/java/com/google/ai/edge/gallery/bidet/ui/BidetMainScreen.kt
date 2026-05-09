@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -45,9 +46,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.consent.GemmaTermsConsentScreen
 import com.google.ai.edge.gallery.bidet.consent.hasGemmaConsent
 import com.google.ai.edge.gallery.bidet.consent.recordGemmaConsent
@@ -316,6 +319,11 @@ private fun ReadyScreen(
                     Text("Tap Record to begin a brain-dump.")
                     Button(onClick = onToggleRecording) { Text("Record") }
                     Button(onClick = onOpenHistory) { Text("History") }
+                    Text(
+                        text = stringResource(R.string.bidet_welcome_recording_cap_note),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
