@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -194,8 +195,33 @@ private fun CleanTabBody(
                 Button(onClick = onGenerate) { Text(generateLabel) }
             }
             is TabState.Generating -> {
-                Text("Generating...")
+                Text(stringResource(R.string.bidet_clean_gen_progress_label))
                 CircularProgressIndicator()
+            }
+            is TabState.Streaming -> {
+                // Progress affordance: linear bar + "N / cap tokens" so the user can see the
+                // generation is alive while Gemma decodes. The partial text below re-renders
+                // as each chunk arrives — this is what replaces the v0.1 forever-spinner that
+                // bit Mark on his 31-min brain dump.
+                val cap = state.tokenCap.coerceAtLeast(1)
+                val progress = (state.tokenCount.toFloat() / cap.toFloat()).coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    stringResource(
+                        R.string.bidet_clean_gen_progress_format,
+                        state.tokenCount,
+                        state.tokenCap,
+                    ),
+                )
+                if (state.partialText.isNotEmpty()) {
+                    Text(
+                        text = AnnotatedString(state.partialText),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
             is TabState.Cached -> {
                 // Compute the diff lazily and only when the toggle is on. RAW is fetched

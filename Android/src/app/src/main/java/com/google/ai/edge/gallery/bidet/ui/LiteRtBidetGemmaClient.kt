@@ -82,6 +82,21 @@ class LiteRtBidetGemmaClient @Inject constructor(
         userPrompt: String,
         maxOutputTokens: Int,
         temperature: Float,
+    ): String = runInferenceStreaming(
+        systemPrompt = systemPrompt,
+        userPrompt = userPrompt,
+        maxOutputTokens = maxOutputTokens,
+        temperature = temperature,
+        onChunk = { _, _ -> /* non-streaming caller drops chunks; final result returned */ },
+    )
+
+    @OptIn(ExperimentalApi::class)
+    override suspend fun runInferenceStreaming(
+        systemPrompt: String,
+        userPrompt: String,
+        maxOutputTokens: Int,
+        temperature: Float,
+        onChunk: (cumulativeText: String, chunkIndex: Int) -> Unit,
     ): String {
         if (!modelProvider.isModelReady()) {
             throw BidetModelNotReadyException(
@@ -131,9 +146,15 @@ class LiteRtBidetGemmaClient @Inject constructor(
 
         return suspendCancellableCoroutine { cont ->
             val sb = StringBuilder()
+            var chunkIndex = 0
             val callback = object : MessageCallback {
                 override fun onMessage(message: Message) {
                     sb.append(message.toString())
+                    chunkIndex += 1
+                    // Hand the running cumulative text to the caller for live UI updates.
+                    // We pass the cumulative String rather than the per-chunk delta so the
+                    // caller can publish atomically without maintaining its own buffer.
+                    onChunk(sb.toString(), chunkIndex)
                 }
 
                 override fun onDone() {

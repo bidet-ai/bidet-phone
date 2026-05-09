@@ -16,18 +16,24 @@
 
 package com.google.ai.edge.gallery.bidet.ui
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
+import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.ai.edge.gallery.bidet.service.CleanGenerationService
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,7 +43,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 
 /**
@@ -50,20 +55,17 @@ import java.security.MessageDigest
  * draft, both persisted to DataStore. The cache key includes a hash of the resolved system
  * prompt so flipping presets shows fresh output rather than a stale cache hit.
  *
- * The v0.1 cleanState / analysisState / foraiState flows have been collapsed into two flows
- * keyed by [SupportAxis]. The on-disk DataStore cache keys (`tab_cache_<sha>`) are unchanged —
- * the cache survives the rename.
- *
- * Phase 2 wiring: this is a [HiltViewModel]. The [BidetGemmaClient] binding is provided by
- * [com.google.ai.edge.gallery.bidet.di.BidetModule]. The aggregator is provided lazily —
- * [com.google.ai.edge.gallery.bidet.ui.BidetMainScreen] binds to [com.google.ai.edge.gallery.bidet.service.RecordingService]
- * and calls [attachAggregator] once the service's Pipeline is live. Until then the tab
- * generators no-op (returning a friendly empty-RAW message).
+ * v0.2 streaming-generation refactor (2026-05-09): generation now runs in
+ * [com.google.ai.edge.gallery.bidet.service.CleanGenerationService] (a foreground dataSync
+ * service) so a 30-min brain dump's 3-4 minute generation actually finishes — even if the
+ * screen sleeps mid-decode. The ViewModel binds to the service, observes its [StateFlow], and
+ * maps the streaming state into the per-axis [TabState] flow that the Compose UI already
+ * collects. The on-disk cache shape (`tab_cache_<sha>`) is unchanged — we still write the
+ * final text on success.
  */
 @HiltViewModel
 class BidetTabsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val gemma: BidetGemmaClient,
 ) : ViewModel() {
 
     private var _aggregator: TranscriptAggregator? = null
@@ -118,6 +120,18 @@ class BidetTabsViewModel @Inject constructor(
         MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val modelMissingSignal: SharedFlow<Unit> = _modelMissingSignal.asSharedFlow()
 
+    /**
+     * Service-binding state. `boundService` is non-null while the activity holds a binding;
+     * the per-axis `observerJob` is the coroutine collecting the service's StateFlow → mapping
+     * into [TabState].
+     */
+    @Volatile private var boundService: CleanGenerationService? = null
+    private var serviceConnection: ServiceConnection? = null
+    private var receptiveObserverJob: Job? = null
+    private var expressiveObserverJob: Job? = null
+    /** Tracks the in-flight cache key per axis so the StateFlow observer can write on Done. */
+    private val pendingCacheKey = mutableMapOf<SupportAxis, String>()
+
     init {
         // Hydrate per-axis preset selection + custom prompt from DataStore so persistence
         // survives across recompositions and app restarts.
@@ -134,6 +148,7 @@ class BidetTabsViewModel @Inject constructor(
             }
             prefs[KEY_EXPRESSIVE_CUSTOM_PROMPT]?.let { _expressiveCustomPrompt.value = it }
         }
+        bindCleanGenerationService()
     }
 
     /** Trigger Receptive (Clean for me) generation against the current RAW. */
@@ -215,25 +230,21 @@ class BidetTabsViewModel @Inject constructor(
                 target.value = TabState.Cached(cached.first, cached.second)
                 return@launch
             }
-            target.value = TabState.Generating
-            try {
-                val result = withContext(Dispatchers.Default) {
-                    gemma.runInference(
-                        systemPrompt = systemPrompt,
-                        userPrompt = raw,
-                        maxOutputTokens = MAX_OUTPUT_TOKENS,
-                        temperature = temperature,
-                    )
-                }
-                val now = System.currentTimeMillis()
-                writeCache(key, result, now)
-                target.value = TabState.Cached(result, now)
-            } catch (t: Throwable) {
-                target.value = TabState.Failed(t.message ?: "Generation failed")
-                if (t is BidetModelNotReadyException) {
-                    _modelMissingSignal.tryEmit(Unit)
-                }
-            }
+            // Move to a known-streaming initial state so the UI flips immediately to the
+            // progress affordance. The token count is 0 until the first chunk lands.
+            target.value = TabState.Streaming(
+                partialText = "",
+                tokenCount = 0,
+                tokenCap = CLEAN_TAB_OUTPUT_TOKEN_CAP,
+            )
+            pendingCacheKey[axis] = key
+            startGenerationService(
+                axis = axis,
+                systemPrompt = systemPrompt,
+                userPrompt = raw,
+                temperature = temperature,
+                cacheKey = key,
+            )
         }
     }
 
@@ -295,6 +306,114 @@ class BidetTabsViewModel @Inject constructor(
         _expressiveState.value = TabState.Idle
     }
 
+    /**
+     * Bind to the [CleanGenerationService] so the ViewModel can start generations + observe
+     * their progress. The binding outlives the Compose host: even if the user navigates away
+     * from the Clean tabs, the service keeps generating and the StateFlow keeps updating
+     * `_receptiveState` / `_expressiveState`. When the user returns, the flow already holds
+     * the latest progress (or the final Done text).
+     */
+    private fun bindCleanGenerationService() {
+        if (serviceConnection != null) return
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                val svc = (binder as? CleanGenerationService.LocalBinder)?.service() ?: return
+                boundService = svc
+                // Re-attach observer jobs against the live StateFlow. We collect once per
+                // axis; the service publishes to the same flow regardless of axis, so each
+                // observer filters on its own axis.
+                receptiveObserverJob?.cancel()
+                receptiveObserverJob = viewModelScope.launch {
+                    svc.stateFlow.collect { handleServiceState(it, SupportAxis.RECEPTIVE) }
+                }
+                expressiveObserverJob?.cancel()
+                expressiveObserverJob = viewModelScope.launch {
+                    svc.stateFlow.collect { handleServiceState(it, SupportAxis.EXPRESSIVE) }
+                }
+            }
+            override fun onServiceDisconnected(name: ComponentName?) {
+                boundService = null
+            }
+        }
+        serviceConnection = connection
+        val intent = Intent(context, CleanGenerationService::class.java)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    /**
+     * Map a single [CleanGenerationService.GenerationState] event into our per-axis
+     * [TabState]. Filters by axis so the receptive observer ignores expressive events and
+     * vice-versa. Done events are persisted to the DataStore cache via [writeCache].
+     */
+    internal fun handleServiceState(
+        state: CleanGenerationService.GenerationState,
+        observerAxis: SupportAxis,
+    ) {
+        when (state) {
+            is CleanGenerationService.GenerationState.Idle -> { /* keep current */ }
+            is CleanGenerationService.GenerationState.Streaming -> {
+                if (state.axis != observerAxis) return
+                stateFlowFor(observerAxis).value = TabState.Streaming(
+                    partialText = state.partialText,
+                    tokenCount = state.tokenCount,
+                    tokenCap = state.tokenCap,
+                )
+            }
+            is CleanGenerationService.GenerationState.Done -> {
+                if (state.axis != observerAxis) return
+                stateFlowFor(observerAxis).value = TabState.Cached(state.text, state.finishedAtMs)
+                val key = pendingCacheKey.remove(observerAxis)
+                if (key != null) {
+                    viewModelScope.launch {
+                        try { writeCache(key, state.text, state.finishedAtMs) }
+                        catch (_: Throwable) { /* DataStore IO; caller already sees the text. */ }
+                    }
+                }
+            }
+            is CleanGenerationService.GenerationState.Failed -> {
+                if (state.axis != observerAxis) return
+                stateFlowFor(observerAxis).value = TabState.Failed(state.message)
+                pendingCacheKey.remove(observerAxis)
+                if (state.modelMissing) {
+                    _modelMissingSignal.tryEmit(Unit)
+                }
+            }
+        }
+    }
+
+    /** Fire the foreground service start intent with all generation parameters. */
+    private fun startGenerationService(
+        axis: SupportAxis,
+        systemPrompt: String,
+        userPrompt: String,
+        temperature: Float,
+        cacheKey: String,
+    ) {
+        ContextCompat.startForegroundService(
+            context,
+            CleanGenerationService.startIntent(
+                context = context,
+                sessionId = cacheKey,
+                axis = axis,
+                systemPrompt = systemPrompt,
+                userPrompt = userPrompt,
+                tokenCap = CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                temperature = temperature,
+            ),
+        )
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        receptiveObserverJob?.cancel()
+        expressiveObserverJob?.cancel()
+        serviceConnection?.let {
+            try { context.unbindService(it) } catch (_: Throwable) { /* never bound or already unbound */ }
+        }
+        serviceConnection = null
+        boundService = null
+    }
+
     private fun presetFlowFor(axis: SupportAxis): MutableStateFlow<String> = when (axis) {
         SupportAxis.RECEPTIVE -> _receptivePreset
         SupportAxis.EXPRESSIVE -> _expressivePreset
@@ -321,13 +440,12 @@ class BidetTabsViewModel @Inject constructor(
         const val PROMPT_VERSION_EXPRESSIVE: String = "v1"
 
         const val DEFAULT_TEMPERATURE: Float = 0.4f
-        // v0.2 (2026-05-09): bumped from 1024 → 16384. The 1024 cap was the upstream Gallery
-        // default, inappropriate for our use case: a recording over ~1 minute produces RAW
-        // input that exceeds 1024 tokens by itself, and LiteRT-LM then aborts the call with
-        // "input token IDs are too long … 1064 is greater than or equal to 1024" before the
-        // model can even start generating. Gemma 4 E4B supports a 128k context, so 16384 is
-        // still conservative — leaves plenty of headroom for both input + output.
-        const val MAX_OUTPUT_TOKENS: Int = 16384
+
+        // On-device Gemma 4 generation runs at ~10 tk/s on a Pixel 8 Pro, so 2048 tokens
+        // ≈ 3-4 minutes wall-clock — the upper bound users will tolerate before feedback.
+        // Not tied to any contest word limit. Input cap is separate (full Gemma 4 context
+        // window of 128k); only output is bounded here.
+        const val CLEAN_TAB_OUTPUT_TOKEN_CAP: Int = 2048
 
         /**
          * No-op aggregator returned before the bound service publishes its Pipeline. Empty

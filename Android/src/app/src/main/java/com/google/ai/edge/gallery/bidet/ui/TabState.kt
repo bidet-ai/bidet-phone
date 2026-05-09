@@ -27,8 +27,24 @@ sealed class TabState {
     /** Tab has never been generated for the current RAW. "Generate" button visible. */
     object Idle : TabState()
 
-    /** Inference in flight. UI shows a progress indicator. */
+    /**
+     * Inference in flight. Kept for compatibility with the old short path (no streaming
+     * surface yet). New code paths emit [Streaming] so the user sees tokens as they arrive.
+     */
     object Generating : TabState()
+
+    /**
+     * Streaming generation in flight. The UI re-renders [partialText] as tokens land.
+     * [tokenCount] is the running count of streamed chunks (a coarse approximation of
+     * tokens; LiteRT-LM emits one Message per decoded token-block — close enough for the
+     * user-facing progress bar). [tokenCap] is the hard ceiling so the UI can render a
+     * percent estimate.
+     */
+    data class Streaming(
+        val partialText: String,
+        val tokenCount: Int,
+        val tokenCap: Int,
+    ) : TabState()
 
     /**
      * Generation complete. UI shows [text] and a "Regenerate" button. [generatedAt] is millis

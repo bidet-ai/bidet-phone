@@ -40,6 +40,15 @@
   <string name="bidet_generate_button" translatable="false">Generate</string>
   <string name="bidet_copy_button" translatable="false">Copy</string>
   <string name="bidet_copied_toast" translatable="false">Copied</string>
+  <!-- v0.2 streaming Clean-tab generation. Foreground service notification + UI progress. -->
+  <string name="bidet_clean_gen_channel_name" translatable="false">Cleaning</string>
+  <string name="bidet_clean_gen_channel_desc" translatable="false">Persistent notification while Gemma is reshaping your brain dump on-device.</string>
+  <string name="bidet_clean_gen_notification_title" translatable="false">Bidet AI is cleaning your brain dump</string>
+  <string name="bidet_clean_gen_notification_text_receptive" translatable="false">Reshaping for you to read. This can take a few minutes.</string>
+  <string name="bidet_clean_gen_notification_text_expressive" translatable="false">Reshaping for someone else to read. This can take a few minutes.</string>
+  <string name="bidet_clean_gen_cancel_action" translatable="false">Cancel</string>
+  <string name="bidet_clean_gen_progress_label" translatable="false">Cleaning…</string>
+  <string name="bidet_clean_gen_progress_format" translatable="false">%1$d / %2$d tokens</string>
   <!-- v0.2 diff toggle: shown above the cached output on Clean-for-me / Clean-for-others.
        Wording avoids "diff" jargon — Mark wants speaker-readable copy. -->
   <string name="bidet_show_changes_label" translatable="false">Show me what changed</string>

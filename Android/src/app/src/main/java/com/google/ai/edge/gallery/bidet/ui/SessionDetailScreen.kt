@@ -300,7 +300,7 @@ class SessionDetailViewModel @Inject constructor(
                     gemma.runInference(
                         systemPrompt = systemPrompt,
                         userPrompt = raw,
-                        maxOutputTokens = BidetTabsViewModel.MAX_OUTPUT_TOKENS,
+                        maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
                         temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
                     )
                 }
