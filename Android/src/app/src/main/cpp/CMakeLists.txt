@@ -21,6 +21,22 @@ project(whisper.cpp.android.bidet)
 set(CMAKE_CXX_STANDARD 17)
 set(WHISPER_LIB_DIR ${CMAKE_SOURCE_DIR}/whisper.cpp)
 
+# 2026-05-09 — force optimization on whisper.cpp + ggml regardless of build type.
+# AGP's debug variant builds CMake projects with CMAKE_BUILD_TYPE=Debug, which
+# means -O0 (no optimization). Whisper-tiny inference at -O0 takes >48 seconds
+# for a 30-second chunk on Pixel 8 Pro (verified empirically, repro session
+# 2026-05-09 07:59 — see Bug C cascade); user-perceived behaviour is "recording
+# captured but no transcript produced" because the slow-running coroutine is
+# cancelled on Stop tap before it ever yields a result. Forcing -O3 across all
+# build types makes whisper-tiny finish in 2-4 sec/chunk as the upstream brief
+# documented.
+add_compile_options(-O3 -ffunction-sections -fdata-sections)
+add_link_options(-Wl,--gc-sections)
+# NDEBUG strips assert() — modest perf win, also keeps debug builds from
+# tripping on assertions inside whisper.cpp's tensor allocators that aren't
+# invariants we want to fail on at runtime.
+add_compile_definitions(NDEBUG)
+
 file(READ "${WHISPER_LIB_DIR}/CMakeLists.txt" MAIN_CMAKE_CONTENT)
 string(REGEX MATCH "project\\(\"whisper\\.cpp\" VERSION ([0-9]+\\.[0-9]+\\.[0-9]+)\\)" VERSION_MATCH "${MAIN_CMAKE_CONTENT}")
 if(CMAKE_MATCH_1)
@@ -55,15 +71,11 @@ function(build_library target_name)
         set(GGML_COMPILE_OPTIONS                      -march=armv8.2-a+fp16)
     endif ()
 
-    if (NOT ${CMAKE_BUILD_TYPE} STREQUAL "Debug")
-        target_compile_options(${target_name} PRIVATE -O3)
-        target_compile_options(${target_name} PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
-        target_compile_options(${target_name} PRIVATE -ffunction-sections -fdata-sections)
-
-        target_link_options(${target_name} PRIVATE -Wl,--gc-sections)
-        target_link_options(${target_name} PRIVATE -Wl,--exclude-libs,ALL)
-        target_link_options(${target_name} PRIVATE -flto)
-    endif ()
+    # 2026-05-09: -O3 + section-gc + flto are now applied unconditionally above
+    # via add_compile_options() because debug builds of whisper.cpp are unusably
+    # slow. The release-only block here used to apply visibility-hidden + flto;
+    # those are size optimizations that don't matter for our Pixel-only debug
+    # build, so we drop them in favor of -O3-everywhere.
 
     FetchContent_Declare(ggml SOURCE_DIR ${WHISPER_LIB_DIR}/ggml)
     FetchContent_MakeAvailable(ggml)
