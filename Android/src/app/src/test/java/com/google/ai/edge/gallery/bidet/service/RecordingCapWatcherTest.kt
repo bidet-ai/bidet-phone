@@ -175,18 +175,31 @@ class RecordingCapWatcherTest {
             startedAtMs = -RecordingCaps.WARN_AUDIBLE_START_MS,
         )
 
-        // Step the simulated wall-clock + the dispatcher's virtual clock together,
-        // BEEP_INTERVAL_MS at a time. After 10 increments we're at HARD_CAP_MS; the
-        // watcher's next iteration breaks via onHardCapReached and terminates. The 100 ms
-        // slop after the loop gives that final iteration room to read the (now hard-cap-
-        // passed) clock and fire the cap. job.join() then waits for the launched coroutine
-        // to finish its finally{} block — same isCompleted-ordering rationale as
-        // `crossing_HARD_CAP_invokes_onHardCapReached`.
-        repeat(10) {
+        // Pump the launched coroutine to its FIRST iteration. This makes watcher iter 1 run
+        // at v=0 with virtualNow=0 (= elapsed 44:50.000) and emit beep #1 deterministically.
+        // Without this leading runCurrent, advanceTimeBy(N) uses a strict-less-than
+        // (events with `time < targetTime`) so a task scheduled at v=0 (the launch) would
+        // not be pumped until targetTime > 0 — and we'd lose the iter-1-reads-44:50 invariant.
+        runCurrent()
+
+        // Step the simulated clock by BEEP_INTERVAL_MS, advance the dispatcher by
+        // BEEP_INTERVAL_MS, then runCurrent() to pump the task scheduled at the new
+        // currentTime. The strict-less-than semantics of advanceTimeBy means the task at
+        // exactly currentTime + N is NOT pumped; runCurrent() picks it up.
+        //
+        // 9 of these steps after the leading beep #1 produce beeps 2..10, then a 10th step
+        // puts virtualNow at HARD_CAP_MS so the next iteration breaks via onHardCapReached.
+        repeat(9) {
             virtualNow.addAndGet(RecordingCaps.BEEP_INTERVAL_MS)
             advanceTimeBy(RecordingCaps.BEEP_INTERVAL_MS)
+            runCurrent()
         }
-        advanceTimeBy(100)
+        // After 9 step-and-pump cycles post-iter-1: 1 + 9 = 10 beeps, virtualNow=9000.
+        // One more BEEP_INTERVAL_MS step puts virtualNow=10000 (= elapsed 45:00) which
+        // makes the next iteration hit the hard-cap branch.
+        virtualNow.addAndGet(RecordingCaps.BEEP_INTERVAL_MS)
+        advanceTimeBy(RecordingCaps.BEEP_INTERVAL_MS)
+        runCurrent()
         job.join()
 
         assertEquals(
@@ -216,16 +229,23 @@ class RecordingCapWatcherTest {
             startedAtMs = -RecordingCaps.WARN_AUDIBLE_START_MS,
         )
 
-        // Drive 3 BEEP_INTERVAL_MS ticks worth of simulated time — enough for several beeps
-        // but well short of the hard-cap. We use runCurrent() (NOT advanceUntilIdle()) because
-        // the watcher loops infinitely until cancel-or-hard-cap; advanceUntilIdle would
-        // happily run all the way through to the 10th beep + hard-cap in this test,
-        // defeating the "stopped early" contract.
+        // Pump the launched coroutine to its first iteration so beep #1 fires at
+        // virtualNow=0 (= elapsed 44:50.000), exactly like in `ten_beeps_emitted_…`.
+        runCurrent()
+
+        // Drive 3 step-and-pump cycles. Each cycle = increment virtualNow + advanceTimeBy +
+        // runCurrent (the runCurrent picks up the task at exactly currentTime, which
+        // advanceTimeBy's strict-less-than semantics does NOT). After this we have beeps
+        // 1-4 (beep #1 from leading runCurrent, beeps 2-4 from the three cycles) — well
+        // short of the hard-cap. We never use advanceUntilIdle() in this test because the
+        // watcher loops infinitely until cancel-or-hard-cap; advanceUntilIdle would happily
+        // run all the way through to the 10th beep + hard-cap, defeating the "stopped early"
+        // contract.
         repeat(3) {
             virtualNow.addAndGet(RecordingCaps.BEEP_INTERVAL_MS)
             advanceTimeBy(RecordingCaps.BEEP_INTERVAL_MS)
+            runCurrent()
         }
-        runCurrent()
         val beepsBeforeCancel = sink.beepCount.get()
         assertTrue(
             "Sanity check: the watcher must have emitted at least one beep before we cancel.",
