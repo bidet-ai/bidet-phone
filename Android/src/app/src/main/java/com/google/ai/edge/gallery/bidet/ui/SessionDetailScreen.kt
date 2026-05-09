@@ -66,12 +66,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * SessionDetailScreen — Phase 4A.
+ * SessionDetailScreen — Phase 4A + v0.2 three-tab restructure.
  *
- * Renders the same four-tab UX as [BidetTabsScreen] but the source of truth is the
- * persisted [BidetSession] row, not a live aggregator. CLEAN/ANALYSIS/FORAI generation runs
- * against the loaded `rawText`; outputs are persisted back to the row's `cleanCached` /
- * `analysisCached` / `foraiCached` columns so re-opening the session is instant.
+ * Renders the v0.2 three-tab UX (RAW / Clean for me / Clean for others) but the source of
+ * truth is the persisted [BidetSession] row, not a live aggregator. CLEAN-FOR-ME generation
+ * runs against the loaded `rawText`; outputs are persisted back to the row's `cleanCached`
+ * (Receptive) / `foraiCached` (Expressive) columns. The legacy `analysisCached` column is
+ * retained for v0.1 history rows but not written to in v0.2.
+ *
+ * Persistence mapping (Phase 4A schema, retained for v0.2 to avoid a migration):
+ *   bidet_sessions.cleanCached      ← Receptive  (Clean for me)  output
+ *   bidet_sessions.foraiCached      ← Expressive (Clean for others) output
+ *   bidet_sessions.analysisCached   ← unused in v0.2; populated only on pre-v0.2 rows
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,7 +90,7 @@ fun SessionDetailScreen(
 
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val pagerState = rememberPagerState(initialPage = TAB_INDEX_RAW, pageCount = { 4 })
+    val pagerState = rememberPagerState(initialPage = TAB_INDEX_RAW, pageCount = { TAB_TITLES.size })
     val coroutineScope = rememberCoroutineScope()
 
     val session = state.session
@@ -146,35 +152,34 @@ fun SessionDetailScreen(
                             rawText = session.rawText,
                             isRecording = false,
                         )
-                        TAB_INDEX_CLEAN -> {
-                            val tabState by viewModel.cleanState.collectAsStateWithLifecycle()
+                        TAB_INDEX_CLEAN_FOR_ME -> {
+                            val tabState by viewModel.receptiveState.collectAsStateWithLifecycle()
+                            // History view: chip selection + custom prompt are inert because
+                            // the cached output was produced under whichever preset was
+                            // active at recording time. Generating again belongs to the live
+                            // recording flow, not the history viewer.
                             CleanTabContent(
+                                axis = SupportAxis.RECEPTIVE,
                                 state = tabState,
-                                onGenerate = { viewModel.generate(TabKind.Clean) },
-                            )
-                        }
-                        TAB_INDEX_ANALYSIS -> {
-                            val tabState by viewModel.analysisState.collectAsStateWithLifecycle()
-                            AnalysisTabContent(
-                                state = tabState,
-                                onGenerate = { viewModel.generate(TabKind.Analysis) },
-                            )
-                        }
-                        TAB_INDEX_FORAI -> {
-                            val tabState by viewModel.foraiState.collectAsStateWithLifecycle()
-                            // SessionDetail is a read-only view of a previously-generated
-                            // session: the chip row is shown but tapping a different preset
-                            // is a no-op here because the cached output was produced under
-                            // whichever preset was active at recording time. Re-running with
-                            // a different preset belongs to the live recording flow, not the
-                            // history viewer.
-                            ForaiTabContent(
-                                state = tabState,
-                                activePresetId = Tab4Preset.FORAI.id,
+                                activePresetId = SupportPreset.RECEPTIVE_SUMMARY.id,
                                 customPrompt = "",
+                                rawTextProvider = { session.rawText },
                                 onSelectPreset = { /* no-op in history view */ },
                                 onSaveCustomPrompt = { /* no-op in history view */ },
-                                onGenerate = { viewModel.generate(TabKind.Forai) },
+                                onGenerate = { viewModel.generate(SupportAxis.RECEPTIVE) },
+                            )
+                        }
+                        TAB_INDEX_CLEAN_FOR_OTHERS -> {
+                            val tabState by viewModel.expressiveState.collectAsStateWithLifecycle()
+                            CleanTabContent(
+                                axis = SupportAxis.EXPRESSIVE,
+                                state = tabState,
+                                activePresetId = SupportPreset.EXPRESSIVE_AI_INGEST.id,
+                                customPrompt = "",
+                                rawTextProvider = { session.rawText },
+                                onSelectPreset = { /* no-op in history view */ },
+                                onSaveCustomPrompt = { /* no-op in history view */ },
+                                onGenerate = { viewModel.generate(SupportAxis.EXPRESSIVE) },
                             )
                         }
                     }
@@ -186,9 +191,8 @@ fun SessionDetailScreen(
 
 private val TAB_TITLES: List<Int> = listOf(
     R.string.bidet_tab_raw,
-    R.string.bidet_tab_clean,
-    R.string.bidet_tab_analysis,
-    R.string.bidet_tab_forai,
+    R.string.bidet_tab_clean_for_me,
+    R.string.bidet_tab_clean_for_others,
 )
 
 /** State of the currently-loaded session. */
@@ -197,14 +201,14 @@ data class SessionDetailUiState(
     val notFound: Boolean = false,
 )
 
-enum class TabKind { Clean, Analysis, Forai }
-
 /**
  * Hilt view-model for [SessionDetailScreen].
  *
  * Lifecycle: caller invokes [bind] from a [LaunchedEffect] keyed on `sessionId`. After bind,
  * the view-model observes the row via the DAO and seeds the tab states from the persisted
- * `cleanCached` / `analysisCached` / `foraiCached` columns so re-opens are instant.
+ * `cleanCached` / `foraiCached` columns so re-opens are instant. v0.1 rows that have
+ * `analysisCached` populated are also surfaced — we prefer Receptive's cached output, but
+ * fall back to the analysis column if Receptive is null and analysis is non-null.
  */
 @HiltViewModel
 class SessionDetailViewModel @Inject constructor(
@@ -220,25 +224,22 @@ class SessionDetailViewModel @Inject constructor(
         if (sessionIdFlow.value == sessionId) return
         sessionIdFlow.value = sessionId
         // Re-seed tab states from the persisted row.
-        _cleanState.value = TabState.Idle
-        _analysisState.value = TabState.Idle
-        _foraiState.value = TabState.Idle
+        _receptiveState.value = TabState.Idle
+        _expressiveState.value = TabState.Idle
         viewModelScope.launch {
             val row = sessionDao.getById(sessionId) ?: return@launch
-            row.cleanCached?.let { _cleanState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs) }
-            row.analysisCached?.let { _analysisState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs) }
-            row.foraiCached?.let { _foraiState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs) }
+            // Receptive prefers cleanCached (the v0.1 CLEAN tab's column); falls back to
+            // analysisCached for old rows that were generated under the v0.1 ANALYSIS tab.
+            val receptive = row.cleanCached ?: row.analysisCached
+            receptive?.let {
+                _receptiveState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs)
+            }
+            row.foraiCached?.let {
+                _expressiveState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs)
+            }
         }
     }
 
-    /**
-     * Phase 4A.1: was a nested-collect (`sessionIdFlow.collect { id ->
-     * sessionDao.observeById(id).collect { ... } }`). Room flows are infinite, so the inner
-     * `.collect` never completed and a subsequent `sessionId` emission could not advance the
-     * outer collector. Refactored to `flatMapLatest`, which cancels the prior inner flow on
-     * each new id and resubscribes — exactly what we want when the user navigates between
-     * sessions while the screen is alive.
-     */
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<SessionDetailUiState> = sessionIdFlow
         .flatMapLatest { id ->
@@ -259,25 +260,26 @@ class SessionDetailViewModel @Inject constructor(
             initialValue = SessionDetailUiState(),
         )
 
-    private val _cleanState = MutableStateFlow<TabState>(TabState.Idle)
-    val cleanState: StateFlow<TabState> = _cleanState.asStateFlow()
+    private val _receptiveState = MutableStateFlow<TabState>(TabState.Idle)
+    val receptiveState: StateFlow<TabState> = _receptiveState.asStateFlow()
 
-    private val _analysisState = MutableStateFlow<TabState>(TabState.Idle)
-    val analysisState: StateFlow<TabState> = _analysisState.asStateFlow()
+    private val _expressiveState = MutableStateFlow<TabState>(TabState.Idle)
+    val expressiveState: StateFlow<TabState> = _expressiveState.asStateFlow()
 
-    private val _foraiState = MutableStateFlow<TabState>(TabState.Idle)
-    val foraiState: StateFlow<TabState> = _foraiState.asStateFlow()
-
-    fun generate(kind: TabKind) {
-        val target = when (kind) {
-            TabKind.Clean -> _cleanState
-            TabKind.Analysis -> _analysisState
-            TabKind.Forai -> _foraiState
+    /**
+     * Run a Gemma generation against the persisted RAW for [axis]. The history view always
+     * uses the axis's default preset (Summary for Receptive, AI-ingestion markdown for
+     * Expressive); preset switching belongs to the live recording flow. The output is
+     * persisted to the column that backs that axis (cleanCached / foraiCached).
+     */
+    fun generate(axis: SupportAxis) {
+        val target = when (axis) {
+            SupportAxis.RECEPTIVE -> _receptiveState
+            SupportAxis.EXPRESSIVE -> _expressiveState
         }
-        val assetPath = when (kind) {
-            TabKind.Clean -> "prompts/clean.txt"
-            TabKind.Analysis -> "prompts/analysis.txt"
-            TabKind.Forai -> "prompts/forai.txt"
+        val assetPath = when (axis) {
+            SupportAxis.RECEPTIVE -> "prompts/receptive_default.txt"
+            SupportAxis.EXPRESSIVE -> "prompts/expressive_default.txt"
         }
 
         viewModelScope.launch {
@@ -304,14 +306,13 @@ class SessionDetailViewModel @Inject constructor(
                 }
                 val now = System.currentTimeMillis()
                 target.value = TabState.Cached(result, now)
-                // Phase 4A.1: persist via column-targeted UPDATE. Previous code did
-                // `getById → copy(field = result) → update(entity)`, which raced sibling
-                // tab-gen flows: simultaneous CLEAN+ANALYSIS taps could both read the same
-                // row, then second-to-finish would clobber first's column with null.
-                when (kind) {
-                    TabKind.Clean -> sessionDao.updateCleanCached(sessionId, result)
-                    TabKind.Analysis -> sessionDao.updateAnalysisCached(sessionId, result)
-                    TabKind.Forai -> sessionDao.updateForaiCached(sessionId, result)
+                // Phase 4A.1: column-targeted UPDATE. v0.2 maps the two live tabs onto the
+                // existing two columns to avoid a Room migration:
+                //   Receptive  (Clean for me)     → cleanCached
+                //   Expressive (Clean for others) → foraiCached
+                when (axis) {
+                    SupportAxis.RECEPTIVE -> sessionDao.updateCleanCached(sessionId, result)
+                    SupportAxis.EXPRESSIVE -> sessionDao.updateForaiCached(sessionId, result)
                 }
             } catch (t: Throwable) {
                 target.value = TabState.Failed(t.message ?: "Generation failed")

@@ -72,18 +72,19 @@ fun BidetSettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var promptCleanOverride by remember { mutableStateOf("") }
-    var promptAnalysisOverride by remember { mutableStateOf("") }
-    var promptForaiOverride by remember { mutableStateOf("") }
+    // v0.2 (2026-05-09): per-axis overrides replace the v0.1 per-tab overrides.
+    var promptReceptiveOverride by remember { mutableStateOf("") }
+    var promptExpressiveOverride by remember { mutableStateOf("") }
     var webhookUrl by remember { mutableStateOf("") }
     var webhookKey by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         val prefs = context.bidetDataStore.data.first()
-        promptCleanOverride = prefs[BidetTabsViewModel.promptOverrideKey("clean")] ?: ""
-        promptAnalysisOverride = prefs[BidetTabsViewModel.promptOverrideKey("analysis")] ?: ""
-        promptForaiOverride = prefs[BidetTabsViewModel.promptOverrideKey("forai")] ?: ""
+        promptReceptiveOverride =
+            prefs[BidetTabsViewModel.promptOverrideKey(SupportAxis.RECEPTIVE)] ?: ""
+        promptExpressiveOverride =
+            prefs[BidetTabsViewModel.promptOverrideKey(SupportAxis.EXPRESSIVE)] ?: ""
         webhookUrl = prefs[KEY_WEBHOOK_URL] ?: ""
         webhookKey = prefs[KEY_WEBHOOK_KEY] ?: ""
     }
@@ -97,25 +98,17 @@ fun BidetSettingsScreen(
 
         Text(stringResource(R.string.bidet_settings_prompt_section))
         OutlinedTextField(
-            value = promptCleanOverride,
-            onValueChange = { promptCleanOverride = it },
-            label = { Text("CLEAN prompt override (blank = use bundled v1)") },
+            value = promptReceptiveOverride,
+            onValueChange = { promptReceptiveOverride = it },
+            label = { Text("Receptive (Clean for me) prompt override (blank = use preset)") },
             modifier = Modifier.fillMaxWidth(),
             minLines = 4,
             maxLines = 12,
         )
         OutlinedTextField(
-            value = promptAnalysisOverride,
-            onValueChange = { promptAnalysisOverride = it },
-            label = { Text("ANALYSIS prompt override") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 4,
-            maxLines = 12,
-        )
-        OutlinedTextField(
-            value = promptForaiOverride,
-            onValueChange = { promptForaiOverride = it },
-            label = { Text("FORAI prompt override") },
+            value = promptExpressiveOverride,
+            onValueChange = { promptExpressiveOverride = it },
+            label = { Text("Expressive (Clean for others) prompt override (blank = use preset)") },
             modifier = Modifier.fillMaxWidth(),
             minLines = 4,
             maxLines = 12,
@@ -124,9 +117,10 @@ fun BidetSettingsScreen(
             onClick = {
                 scope.launch {
                     context.bidetDataStore.edit { prefs ->
-                        prefs[BidetTabsViewModel.promptOverrideKey("clean")] = promptCleanOverride
-                        prefs[BidetTabsViewModel.promptOverrideKey("analysis")] = promptAnalysisOverride
-                        prefs[BidetTabsViewModel.promptOverrideKey("forai")] = promptForaiOverride
+                        prefs[BidetTabsViewModel.promptOverrideKey(SupportAxis.RECEPTIVE)] =
+                            promptReceptiveOverride
+                        prefs[BidetTabsViewModel.promptOverrideKey(SupportAxis.EXPRESSIVE)] =
+                            promptExpressiveOverride
                     }
                     status = "Prompt overrides saved."
                 }

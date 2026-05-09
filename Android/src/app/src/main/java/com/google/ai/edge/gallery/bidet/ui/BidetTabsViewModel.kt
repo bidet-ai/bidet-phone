@@ -41,11 +41,18 @@ import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 
 /**
- * Top-level state holder for [BidetTabsScreen]. Owns:
- *  - per-tab [TabState] flows (CLEAN / ANALYSIS / FORAI; RAW is owned by the aggregator).
- *  - the prompt-template loader (asset → string, with an optional DataStore override in
- *    debug builds; brief §11 BidetSettingsScreen wires the override).
- *  - cache lookups keyed by SHA-256(rawSha + promptVersion + temperature) per brief §7.
+ * Top-level state holder for [BidetTabsScreen]. v0.2 three-tab restructure:
+ *  - Tab 1 RAW                  — owned by the aggregator, no state in this VM.
+ *  - Tab 2 "Clean for me"       — RECEPTIVE Support axis ([SupportAxis.RECEPTIVE]).
+ *  - Tab 3 "Clean for others"   — EXPRESSIVE Support axis ([SupportAxis.EXPRESSIVE]).
+ *
+ * Each Clean tab carries its own active-preset selection + its own free-form custom-prompt
+ * draft, both persisted to DataStore. The cache key includes a hash of the resolved system
+ * prompt so flipping presets shows fresh output rather than a stale cache hit.
+ *
+ * The v0.1 cleanState / analysisState / foraiState flows have been collapsed into two flows
+ * keyed by [SupportAxis]. The on-disk DataStore cache keys (`tab_cache_<sha>`) are unchanged —
+ * the cache survives the rename.
  *
  * Phase 2 wiring: this is a [HiltViewModel]. The [BidetGemmaClient] binding is provided by
  * [com.google.ai.edge.gallery.bidet.di.BidetModule]. The aggregator is provided lazily —
@@ -78,30 +85,29 @@ class BidetTabsViewModel @Inject constructor(
         }
     }
 
-    private val _cleanState = MutableStateFlow<TabState>(TabState.Idle)
-    val cleanState: StateFlow<TabState> = _cleanState.asStateFlow()
+    /** Tab 2 "Clean for me" / RECEPTIVE Support output state. */
+    private val _receptiveState = MutableStateFlow<TabState>(TabState.Idle)
+    val receptiveState: StateFlow<TabState> = _receptiveState.asStateFlow()
 
-    private val _analysisState = MutableStateFlow<TabState>(TabState.Idle)
-    val analysisState: StateFlow<TabState> = _analysisState.asStateFlow()
+    /** Tab 3 "Clean for others" / EXPRESSIVE Support output state. */
+    private val _expressiveState = MutableStateFlow<TabState>(TabState.Idle)
+    val expressiveState: StateFlow<TabState> = _expressiveState.asStateFlow()
 
-    private val _foraiState = MutableStateFlow<TabState>(TabState.Idle)
-    val foraiState: StateFlow<TabState> = _foraiState.asStateFlow()
+    /** Active preset chip on the Receptive (Clean for me) tab. Default = Summary. */
+    private val _receptivePreset = MutableStateFlow(SupportPreset.RECEPTIVE_SUMMARY.id)
+    val receptivePreset: StateFlow<String> = _receptivePreset.asStateFlow()
 
-    /**
-     * Tab 4 preset state. Mirrors [Tab4Preset.id]. Default = [Tab4Preset.FORAI] so the v0.1
-     * behaviour (structured-markdown-for-AI-ingestion) is preserved when the user has never
-     * touched the chip row. Persisted to DataStore under [KEY_TAB4_ACTIVE_PRESET].
-     */
-    private val _tab4ActivePreset = MutableStateFlow(Tab4Preset.FORAI.id)
-    val tab4ActivePreset: StateFlow<String> = _tab4ActivePreset.asStateFlow()
+    /** User's free-form Receptive custom prompt (used iff active preset = RECEPTIVE_CUSTOM). */
+    private val _receptiveCustomPrompt = MutableStateFlow("")
+    val receptiveCustomPrompt: StateFlow<String> = _receptiveCustomPrompt.asStateFlow()
 
-    /**
-     * Free-form custom prompt the user has entered via the Tab 4 BottomSheet. Used only when
-     * [tab4ActivePreset] == [Tab4Preset.CUSTOM]. Persisted to DataStore under
-     * [KEY_TAB4_CUSTOM_PROMPT].
-     */
-    private val _tab4CustomPrompt = MutableStateFlow("")
-    val tab4CustomPrompt: StateFlow<String> = _tab4CustomPrompt.asStateFlow()
+    /** Active preset chip on the Expressive (Clean for others) tab. Default = AI-ingestion markdown. */
+    private val _expressivePreset = MutableStateFlow(SupportPreset.EXPRESSIVE_AI_INGEST.id)
+    val expressivePreset: StateFlow<String> = _expressivePreset.asStateFlow()
+
+    /** User's free-form Expressive custom prompt (used iff active preset = EXPRESSIVE_CUSTOM). */
+    private val _expressiveCustomPrompt = MutableStateFlow("")
+    val expressiveCustomPrompt: StateFlow<String> = _expressiveCustomPrompt.asStateFlow()
 
     /**
      * One-shot signal: emitted when a tab generation throws [BidetModelNotReadyException].
@@ -113,77 +119,78 @@ class BidetTabsViewModel @Inject constructor(
     val modelMissingSignal: SharedFlow<Unit> = _modelMissingSignal.asSharedFlow()
 
     init {
-        // Hydrate Tab 4 selection from DataStore so it persists across recompositions and
-        // app restarts. If nothing was ever saved, the defaults (FORAI preset, empty custom)
-        // are kept.
+        // Hydrate per-axis preset selection + custom prompt from DataStore so persistence
+        // survives across recompositions and app restarts.
         viewModelScope.launch {
             val prefs = context.bidetDataStore.data.first()
-            prefs[KEY_TAB4_ACTIVE_PRESET]?.let { saved ->
-                if (Tab4Preset.byId(saved) != null) _tab4ActivePreset.value = saved
+            prefs[KEY_RECEPTIVE_PRESET]?.let { saved ->
+                val p = SupportPreset.byId(saved)
+                if (p != null && p.axis == SupportAxis.RECEPTIVE) _receptivePreset.value = saved
             }
-            prefs[KEY_TAB4_CUSTOM_PROMPT]?.let { _tab4CustomPrompt.value = it }
+            prefs[KEY_RECEPTIVE_CUSTOM_PROMPT]?.let { _receptiveCustomPrompt.value = it }
+            prefs[KEY_EXPRESSIVE_PRESET]?.let { saved ->
+                val p = SupportPreset.byId(saved)
+                if (p != null && p.axis == SupportAxis.EXPRESSIVE) _expressivePreset.value = saved
+            }
+            prefs[KEY_EXPRESSIVE_CUSTOM_PROMPT]?.let { _expressiveCustomPrompt.value = it }
         }
     }
 
-    /** Trigger CLEAN generation for the current RAW. Caches result by SHA-256 key. */
-    fun generateClean(temperature: Float = DEFAULT_TEMPERATURE) {
-        generate(TAB_CLEAN, _cleanState, ASSET_CLEAN, PROMPT_VERSION_CLEAN, temperature)
+    /** Trigger Receptive (Clean for me) generation against the current RAW. */
+    fun generateReceptive(temperature: Float = DEFAULT_TEMPERATURE) {
+        generate(SupportAxis.RECEPTIVE, _receptiveState, temperature)
     }
 
-    fun generateAnalysis(temperature: Float = DEFAULT_TEMPERATURE) {
-        generate(TAB_ANALYSIS, _analysisState, ASSET_ANALYSIS, PROMPT_VERSION_ANALYSIS, temperature)
-    }
-
-    /**
-     * Trigger Tab 4 (the customizable prompt tab) generation. The system prompt is resolved
-     * at call time from the current [tab4ActivePreset] / [tab4CustomPrompt] selection. The
-     * cache key incorporates a short hash of the active prompt so flipping presets shows
-     * fresh output rather than the previous preset's cached result.
-     */
-    fun generateForai(temperature: Float = DEFAULT_TEMPERATURE) {
-        generate(TAB_FORAI, _foraiState, ASSET_FORAI, PROMPT_VERSION_FORAI, temperature)
+    /** Trigger Expressive (Clean for others) generation against the current RAW. */
+    fun generateExpressive(temperature: Float = DEFAULT_TEMPERATURE) {
+        generate(SupportAxis.EXPRESSIVE, _expressiveState, temperature)
     }
 
     /**
-     * Switch the active Tab 4 preset chip. Persisted to DataStore. Side-effect: the cached
-     * Tab 4 state is reset to [TabState.Idle] so the user is not left looking at output
-     * generated under the previous preset's prompt.
+     * Switch the active preset chip on a given axis. Persisted to DataStore. Resets the cached
+     * tab state to [TabState.Idle] so the user is not left looking at output generated under
+     * the previous preset's prompt.
      */
-    fun setTab4Preset(presetId: String) {
-        if (Tab4Preset.byId(presetId) == null) return
-        if (_tab4ActivePreset.value == presetId) return
-        _tab4ActivePreset.value = presetId
-        _foraiState.value = TabState.Idle
+    fun setPreset(axis: SupportAxis, presetId: String) {
+        val preset = SupportPreset.byId(presetId) ?: return
+        if (preset.axis != axis) return
+        val flow = presetFlowFor(axis)
+        if (flow.value == presetId) return
+        flow.value = presetId
+        stateFlowFor(axis).value = TabState.Idle
         viewModelScope.launch {
             context.bidetDataStore.edit { prefs ->
-                prefs[KEY_TAB4_ACTIVE_PRESET] = presetId
+                prefs[presetKeyFor(axis)] = presetId
             }
         }
     }
 
     /**
-     * Persist the user's free-form custom prompt (saved when they tap "Save" on the
-     * BottomSheet). If the active preset is currently [Tab4Preset.CUSTOM], the cached state
-     * is reset because the prompt body — and therefore expected output — has changed.
+     * Persist the user's free-form custom prompt for an axis. If the active preset on that
+     * axis is the axis-specific custom preset, reset the cached tab state (the prompt body —
+     * and therefore expected output — has changed).
      */
-    fun setTab4CustomPrompt(text: String) {
-        if (_tab4CustomPrompt.value == text) return
-        _tab4CustomPrompt.value = text
-        if (_tab4ActivePreset.value == Tab4Preset.CUSTOM.id) {
-            _foraiState.value = TabState.Idle
+    fun setCustomPrompt(axis: SupportAxis, text: String) {
+        val flow = customPromptFlowFor(axis)
+        if (flow.value == text) return
+        flow.value = text
+        val customId = when (axis) {
+            SupportAxis.RECEPTIVE -> SupportPreset.RECEPTIVE_CUSTOM.id
+            SupportAxis.EXPRESSIVE -> SupportPreset.EXPRESSIVE_CUSTOM.id
+        }
+        if (presetFlowFor(axis).value == customId) {
+            stateFlowFor(axis).value = TabState.Idle
         }
         viewModelScope.launch {
             context.bidetDataStore.edit { prefs ->
-                prefs[KEY_TAB4_CUSTOM_PROMPT] = text
+                prefs[customPromptKeyFor(axis)] = text
             }
         }
     }
 
     private fun generate(
-        tabId: String,
+        axis: SupportAxis,
         target: MutableStateFlow<TabState>,
-        assetPath: String,
-        promptVersion: String,
         temperature: Float,
     ) {
         viewModelScope.launch {
@@ -192,12 +199,16 @@ class BidetTabsViewModel @Inject constructor(
                 target.value = TabState.Failed("RAW transcript is empty.")
                 return@launch
             }
-            val systemPrompt = loadPromptText(tabId, assetPath)
+            val systemPrompt = resolveSystemPrompt(axis)
             val rawSha = sha256(raw)
             // Cache key includes a short hash of the system prompt so any prompt change
-            // (preset switch, custom-prompt edit, debug override edit) invalidates the
-            // cache without requiring a manual promptVersion bump.
+            // (preset switch, custom-prompt edit) invalidates the cache without requiring a
+            // manual promptVersion bump.
             val promptHash = sha256(systemPrompt).take(8)
+            val promptVersion = when (axis) {
+                SupportAxis.RECEPTIVE -> PROMPT_VERSION_RECEPTIVE
+                SupportAxis.EXPRESSIVE -> PROMPT_VERSION_EXPRESSIVE
+            }
             val key = sha256("$rawSha|$promptVersion|$promptHash|$temperature")
             val cached = readCache(key)
             if (cached != null) {
@@ -227,44 +238,37 @@ class BidetTabsViewModel @Inject constructor(
     }
 
     /**
-     * Read a prompt template. Resolution order:
-     *  1. For Tab 4 (FORAI): the active preset selection — including a free-form custom
-     *     prompt — takes priority. This is the v0.2 customizable-prompt feature.
+     * Resolve the system-prompt body for [axis]. Resolution order:
+     *  1. The active preset selection (which may be a built-in or the axis-specific custom).
+     *     [SupportPromptResolver] handles unknown ids + blank custom prompts.
      *  2. Debug-build override: the [BidetSettingsScreen] writes raw template text to
-     *     DataStore for prompt-iteration without rebuilding the APK.
-     *  3. The bundled asset under `assets/prompts/` (v1, locked).
-     */
-    private suspend fun loadPromptText(tabId: String, assetPath: String): String {
-        if (tabId == TAB_FORAI) {
-            val tab4Resolved = resolveTab4Prompt()
-            if (!tab4Resolved.isNullOrBlank()) return tab4Resolved
-        }
-        val override = readPromptOverride(tabId)
-        if (!override.isNullOrBlank()) return override
-        return context.assets.open(assetPath).bufferedReader().use { it.readText() }
-    }
-
-    /**
-     * Resolve the Tab 4 prompt body from the currently active preset. Returns null when the
-     * preset is [Tab4Preset.FORAI] (signaling the caller should fall through to the existing
-     * debug override / bundled asset path), so the v0.1 default behaviour is byte-identical.
+     *     DataStore for prompt-iteration without rebuilding the APK. Honoured AFTER the
+     *     preset selection so a debug user can still test their preset chips.
      *
-     * Delegates rule logic to [Tab4PromptResolver] so the same state machine is exercised
-     * in unit tests without needing Android Context.
+     * This is the unified resolver — there is no longer a separate FORAI-default fallthrough
+     * because every preset (including the legacy "FORAI default") is first-class in
+     * [SupportPreset].
      */
-    private fun resolveTab4Prompt(): String? {
-        return Tab4PromptResolver.resolve(
-            activePresetId = _tab4ActivePreset.value,
-            customPrompt = _tab4CustomPrompt.value,
+    private suspend fun resolveSystemPrompt(axis: SupportAxis): String {
+        val activePresetId = presetFlowFor(axis).value
+        val customPrompt = customPromptFlowFor(axis).value
+
+        val override = readPromptOverride(axis)
+        if (!override.isNullOrBlank()) return override
+
+        return SupportPromptResolver.resolve(
+            axis = axis,
+            activePresetId = activePresetId,
+            customPrompt = customPrompt,
             loadAsset = { path ->
                 context.assets.open(path).bufferedReader().use { it.readText() }
             },
         )
     }
 
-    private suspend fun readPromptOverride(tabId: String): String? {
+    private suspend fun readPromptOverride(axis: SupportAxis): String? {
         val prefs = context.bidetDataStore.data.first()
-        return prefs[promptOverrideKey(tabId)]
+        return prefs[promptOverrideKey(axis)]
     }
 
     /** Persist an in-memory cache entry alongside the existing DataStore. */
@@ -287,30 +291,43 @@ class BidetTabsViewModel @Inject constructor(
 
     /** Reset all tab states (called when a new recording session starts). */
     fun resetTabs() {
-        _cleanState.value = TabState.Idle
-        _analysisState.value = TabState.Idle
-        _foraiState.value = TabState.Idle
+        _receptiveState.value = TabState.Idle
+        _expressiveState.value = TabState.Idle
     }
 
+    private fun presetFlowFor(axis: SupportAxis): MutableStateFlow<String> = when (axis) {
+        SupportAxis.RECEPTIVE -> _receptivePreset
+        SupportAxis.EXPRESSIVE -> _expressivePreset
+    }
+
+    private fun customPromptFlowFor(axis: SupportAxis): MutableStateFlow<String> = when (axis) {
+        SupportAxis.RECEPTIVE -> _receptiveCustomPrompt
+        SupportAxis.EXPRESSIVE -> _expressiveCustomPrompt
+    }
+
+    private fun stateFlowFor(axis: SupportAxis): MutableStateFlow<TabState> = when (axis) {
+        SupportAxis.RECEPTIVE -> _receptiveState
+        SupportAxis.EXPRESSIVE -> _expressiveState
+    }
+
+    /** Snapshot of the current RAW transcript — used by the diff-toggle UI. */
+    fun currentRaw(): String = aggregator.currentText()
+
     companion object {
-        private const val TAB_CLEAN = "clean"
-        private const val TAB_ANALYSIS = "analysis"
-        private const val TAB_FORAI = "forai"
-
-        private const val ASSET_CLEAN = "prompts/clean.txt"
-        private const val ASSET_ANALYSIS = "prompts/analysis.txt"
-        private const val ASSET_FORAI = "prompts/forai.txt"
-
-        // Bumping these strings invalidates cached generations. Bump when a prompt changes.
-        const val PROMPT_VERSION_CLEAN: String = "v1"
-        const val PROMPT_VERSION_ANALYSIS: String = "v1"
-        // v2 (2026-05-09): Tab 4 became the customizable-prompt tab. The cache key now
-        // also hashes the active prompt body, but bumping the version invalidates any
-        // pre-v0.2 FORAI entries that didn't include a promptHash component.
-        const val PROMPT_VERSION_FORAI: String = "v2"
+        // Bumping these strings invalidates cached generations. Bump when the resolver layer
+        // changes shape. The promptHash component of the cache key absorbs day-to-day
+        // preset / custom-prompt edits.
+        const val PROMPT_VERSION_RECEPTIVE: String = "v1"
+        const val PROMPT_VERSION_EXPRESSIVE: String = "v1"
 
         const val DEFAULT_TEMPERATURE: Float = 0.4f
-        const val MAX_OUTPUT_TOKENS: Int = 1024
+        // v0.2 (2026-05-09): bumped from 1024 → 16384. The 1024 cap was the upstream Gallery
+        // default, inappropriate for our use case: a recording over ~1 minute produces RAW
+        // input that exceeds 1024 tokens by itself, and LiteRT-LM then aborts the call with
+        // "input token IDs are too long … 1064 is greater than or equal to 1024" before the
+        // model can even start generating. Gemma 4 E4B supports a 128k context, so 16384 is
+        // still conservative — leaves plenty of headroom for both input + output.
+        const val MAX_OUTPUT_TOKENS: Int = 16384
 
         /**
          * No-op aggregator returned before the bound service publishes its Pipeline. Empty
@@ -318,14 +335,33 @@ class BidetTabsViewModel @Inject constructor(
          */
         private val PLACEHOLDER_AGGREGATOR = TranscriptAggregator()
 
-        // DataStore keys for the v0.2 customizable-prompt feature (Tab 4).
-        val KEY_TAB4_ACTIVE_PRESET: Preferences.Key<String> =
-            stringPreferencesKey("tab4_active_preset")
-        val KEY_TAB4_CUSTOM_PROMPT: Preferences.Key<String> =
-            stringPreferencesKey("tab4_custom_prompt")
+        // DataStore keys for the v0.2 per-axis preset selection + custom prompt.
+        val KEY_RECEPTIVE_PRESET: Preferences.Key<String> =
+            stringPreferencesKey("receptive_active_preset")
+        val KEY_RECEPTIVE_CUSTOM_PROMPT: Preferences.Key<String> =
+            stringPreferencesKey("receptive_custom_prompt")
+        val KEY_EXPRESSIVE_PRESET: Preferences.Key<String> =
+            stringPreferencesKey("expressive_active_preset")
+        val KEY_EXPRESSIVE_CUSTOM_PROMPT: Preferences.Key<String> =
+            stringPreferencesKey("expressive_custom_prompt")
 
-        fun promptOverrideKey(tabId: String): Preferences.Key<String> =
-            stringPreferencesKey("bidet_prompt_override_$tabId")
+        fun presetKeyFor(axis: SupportAxis): Preferences.Key<String> = when (axis) {
+            SupportAxis.RECEPTIVE -> KEY_RECEPTIVE_PRESET
+            SupportAxis.EXPRESSIVE -> KEY_EXPRESSIVE_PRESET
+        }
+
+        fun customPromptKeyFor(axis: SupportAxis): Preferences.Key<String> = when (axis) {
+            SupportAxis.RECEPTIVE -> KEY_RECEPTIVE_CUSTOM_PROMPT
+            SupportAxis.EXPRESSIVE -> KEY_EXPRESSIVE_CUSTOM_PROMPT
+        }
+
+        fun promptOverrideKey(axis: SupportAxis): Preferences.Key<String> {
+            val tag = when (axis) {
+                SupportAxis.RECEPTIVE -> "receptive"
+                SupportAxis.EXPRESSIVE -> "expressive"
+            }
+            return stringPreferencesKey("bidet_prompt_override_$tag")
+        }
 
         internal fun sha256(s: String): String {
             val md = MessageDigest.getInstance("SHA-256")

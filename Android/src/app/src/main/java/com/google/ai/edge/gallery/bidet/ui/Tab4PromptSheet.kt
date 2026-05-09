@@ -40,17 +40,22 @@ import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 
 /**
- * BottomSheet for entering a free-form Tab 4 prompt. Brief §"Tab 4 customizable prompt".
+ * BottomSheet for entering a free-form custom prompt on the Clean-for-me / Clean-for-others
+ * tab. The sheet is axis-agnostic — same UI, different active-preset id (RECEPTIVE_CUSTOM
+ * vs EXPRESSIVE_CUSTOM) flipped by the caller.
  *
  * Behaviour:
- *  - Initialized with the currently-saved custom prompt (so editing existing text is
- *    possible, not just starting fresh).
+ *  - Initialized with the currently-saved custom prompt for the calling axis (so editing
+ *    existing text is possible, not just starting fresh).
  *  - "Save and use" persists the prompt via [onSave] and dismisses the sheet. The host
- *    composable is expected to flip the active preset to [Tab4Preset.CUSTOM] in the same
- *    callback.
+ *    composable is expected to flip the active preset to the axis-specific custom preset id
+ *    in the same callback.
  *  - "Cancel" / dismissal discards in-progress edits — the persisted prompt is unchanged.
  *  - Empty input is allowed but Save is disabled until at least one non-whitespace character
- *    is entered, to prevent the inference falling through to the FORAI default silently.
+ *    is entered, to prevent the inference falling through to the axis default silently.
+ *
+ * The composable name is unchanged from v0.1 ("Tab4PromptSheet") so call sites don't churn,
+ * but it is no longer Tab-4-specific.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,12 +72,12 @@ fun Tab4PromptSheet(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(stringResource(R.string.bidet_tab4_sheet_title))
-            Text(stringResource(R.string.bidet_tab4_sheet_hint))
+            Text(stringResource(R.string.bidet_preset_sheet_title))
+            Text(stringResource(R.string.bidet_preset_sheet_hint))
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                placeholder = { Text(stringResource(R.string.bidet_tab4_sheet_placeholder)) },
+                placeholder = { Text(stringResource(R.string.bidet_preset_sheet_placeholder)) },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 6,
                 maxLines = 16,
@@ -83,11 +88,11 @@ fun Tab4PromptSheet(
                     onClick = { onSave(draft) },
                     enabled = draft.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.bidet_tab4_sheet_save)) }
+                ) { Text(stringResource(R.string.bidet_preset_sheet_save)) }
                 OutlinedButton(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.bidet_tab4_sheet_cancel)) }
+                ) { Text(stringResource(R.string.bidet_preset_sheet_cancel)) }
             }
         }
     }

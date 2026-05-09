@@ -1,0 +1,20 @@
+Convert this verbal brain-dump into structured markdown for AI ingestion. The speaker will paste your output into Claude / ChatGPT / Gemini. Keep names, numbers, dates verbatim. No commentary.
+
+Output:
+# <Title — one descriptive line>
+## Context
+<one sentence about the moment/topic>
+## Content
+<cleaned brain-dump, lightly bulleted if natural breaks exist>
+## Tags
+<3-7 lowercase keywords, comma-separated>
+## Refs
+- <person/place/thing/concept>
+- <person/place/thing/concept>
+
+Output ONLY the markdown. No preamble.
+
+TRANSCRIPT:
+{transcript}
+
+MARKDOWN:
