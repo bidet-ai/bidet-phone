@@ -338,13 +338,14 @@ val fetchWhisperModel = tasks.register<FetchWhisperModelTask>("fetchWhisperModel
 // Hook into the asset-merge step so the .bin lands in src/main/assets/whisper/ before AGP
 // reads it. Phase 1 lesson: this is the legitimate kind of task hook (asset-pipeline
 // prerequisite, not a verification gate stapled onto assembleDebug).
+// 2026-05-09: with product flavors (whisper, gemma) the asset-merge tasks are
+// renamed to merge<Flavor><BuildType>Assets — the old hardcoded list of unflavored
+// names ("mergeDebugAssets" etc.) never matched, so fetchWhisperModel never ran
+// in flavor builds. Result: ggml-tiny.en.bin missing from both flavor APKs and
+// every recording fails with "transcription failed chunk N". Switch to a regex
+// match that catches all flavor permutations + the legacy unflavored names.
 afterEvaluate {
-    listOf(
-        "mergeDebugAssets",
-        "mergeReleaseAssets",
-        "generateDebugAssets",
-        "generateReleaseAssets",
-    ).forEach { taskName ->
-        tasks.findByName(taskName)?.dependsOn(fetchWhisperModel)
-    }
+    val pattern = Regex("(merge|generate).*Assets")
+    tasks.matching { pattern.matches(it.name) }
+        .configureEach { dependsOn(fetchWhisperModel) }
 }
