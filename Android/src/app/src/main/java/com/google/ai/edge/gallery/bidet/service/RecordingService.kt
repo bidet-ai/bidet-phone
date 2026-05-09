@@ -368,11 +368,29 @@ class RecordingService : Service() {
      * finalizeSessionRow on `scope`. If Android tore the service down (long sessions, slow
      * eMMC, OOM-killer) before WAV concat completed, onDestroy()'s `scope.cancel()` would
      * abort finalize, leaving `audio.wav.tmp` orphaned and the row's `audioWavPath` null →
-     * Share/Export silently broken.
+     * Share/Export silently broken. Fix: keep the foreground service alive until finalize
+     * completes, then tear down on the Main dispatcher inside the same launch{}.
      *
-     * Fix: keep the foreground service alive until finalize completes, then tear down on
-     * the Main dispatcher inside the same launch{}. The notification stays visible during
-     * concat so the OS won't reclaim us mid-flush.
+     * F1.1 fix (2026-05-09): the previous teardown sequence was
+     *     captureEngine.stop()
+     *     worker.stop()              ← only CANCELS the worker's Job
+     *     chunkQueue.close()
+     *     transcriptionEngine.close()
+     * `worker.stop()` does not JOIN the in-flight transcribe — and because the worker's
+     * `handleAudio` wraps its transcribe call in
+     * `withContext(NonCancellable + Dispatchers.Default)`, a transcribe that started
+     * before Stop keeps running. Then we immediately `transcriptionEngine.close()` and
+     * pull the native pointer out from under whisper.cpp / LiteRT-LM. Classic
+     * use-after-free; on a real device the failure mode is "user taps Stop mid-transcribe
+     * → app dies + ANR". Bad demo crash.
+     *
+     * Now: the synchronous half (stop capture, drop pipeline ref, flip the StateFlow,
+     * abandon audio focus) still runs up front so the UI flips back to the welcome
+     * screen the instant the user taps Stop. The async half — `worker.stopAndJoin()` →
+     * `chunkQueue.close()` → `transcriptionEngine.close()` → finalize — runs on `scope`.
+     * The join lets the in-flight transcribe write its result to the aggregator + DB
+     * before we tear down native resources, so the user gets the last chunk's text in
+     * their saved session instead of a crash.
      */
     fun stopRecording() {
         val activePipeline = pipeline
@@ -383,30 +401,42 @@ class RecordingService : Service() {
         sessionPersistJob?.cancel()
         sessionPersistJob = null
 
-        activePipeline?.let {
-            it.captureEngine.stop()
-            it.worker.stop()
-            it.chunkQueue.close()
-            it.transcriptionEngine.close()
-        }
+        // Synchronous half: stop capture (so no NEW chunks land), drop the pipeline ref,
+        // flip the UI status flow, abandon audio focus. Everything that needs the
+        // user-visible state to flip RIGHT NOW happens here.
+        activePipeline?.captureEngine?.stop()
         pipeline = null
         abandonAudioFocus()
 
         // Bug B (2026-05-09): emit recorded-stopped state so the UI flips back to the
-        // welcome screen. The session row finalize keeps running on `scope` below.
-        // Clear any prior engine-init banner — a successful stop after a successful start
-        // means the engine was fine.
+        // welcome screen. Clear any prior engine-init banner — a successful stop after a
+        // successful start means the engine was fine.
         _statusFlow.value = Status(false, null, 0L, null, null)
 
-        if (sessionId != null && recordingStartedAt > 0L) {
+        if (activePipeline != null) {
             scope.launch {
                 try {
-                    finalizeSessionRow(sessionId, recordingStartedAt, finalRawText)
+                    // F1.1 (2026-05-09): join the worker BEFORE closing native resources.
+                    // The worker's handleAudio uses NonCancellable + Dispatchers.Default,
+                    // so an in-flight transcribe completes (and writes to the aggregator)
+                    // even though we cancelled the outer Job. Once stopAndJoin returns,
+                    // nothing is touching transcriptionEngine.
+                    activePipeline.worker.stopAndJoin()
+                    activePipeline.chunkQueue.close()
+                    activePipeline.transcriptionEngine.close()
                 } catch (t: Throwable) {
-                    Log.w(TAG, "finalizeSessionRow threw: ${t.message}", t)
-                } finally {
-                    withContext(Dispatchers.Main) { tearDownForeground() }
+                    Log.w(TAG, "stopRecording teardown threw: ${t.message}", t)
                 }
+                if (sessionId != null && recordingStartedAt > 0L) {
+                    val resolvedRawText = if (finalRawText.isNotBlank()) finalRawText
+                    else activePipeline.aggregator.currentText()
+                    try {
+                        finalizeSessionRow(sessionId, recordingStartedAt, resolvedRawText)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "finalizeSessionRow threw: ${t.message}", t)
+                    }
+                }
+                withContext(Dispatchers.Main) { tearDownForeground() }
             }
         } else {
             // No active session — tear down immediately.

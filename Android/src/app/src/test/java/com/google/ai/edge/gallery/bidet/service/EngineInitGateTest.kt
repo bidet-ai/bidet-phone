@@ -71,7 +71,10 @@ class EngineInitGateTest {
             return initResult
         }
 
-        override fun transcribe(floatPcm: FloatArray, sampleRateHz: Int): String {
+        // F3.4 (2026-05-09): TranscriptionEngine.transcribe is now `suspend` so the
+        // LiteRT-LM-backed GemmaAudioEngine can use suspendCancellableCoroutine to
+        // honour coroutine cancellation. Fake follows the new signature.
+        override suspend fun transcribe(floatPcm: FloatArray, sampleRateHz: Int): String {
             fail("transcribe must not be called when init failed")
             throw IllegalStateException()
         }

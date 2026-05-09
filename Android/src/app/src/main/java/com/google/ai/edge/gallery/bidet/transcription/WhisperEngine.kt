@@ -43,10 +43,12 @@ import java.util.concurrent.atomic.AtomicReference
  *    `${context.filesDir}/whisper/ggml-tiny.en.bin` on first init (the native loader needs a
  *    real filesystem path).
  *
- * Concurrency: [WhisperContext.transcribeData] and [WhisperContext.release] are `suspend`. We
- * bridge to the existing synchronous API by using [runBlocking] inside [transcribe] and [close].
- * Safe because [TranscriptionWorker] already wraps [transcribe] in `withContext(Dispatchers.Default)`
- * — the runBlocking happens off the main thread.
+ * Concurrency: [WhisperContext.transcribeData] and [WhisperContext.release] are `suspend`.
+ * F3.4 (2026-05-09): [transcribe] is now `suspend` directly so we call those without
+ * `runBlocking`. [close] still uses `runBlocking` because the [TranscriptionEngine.close]
+ * contract is sync (called during service teardown, not from a coroutine). The
+ * RecordingService.stopRecording call site runs `close()` from a Dispatchers.Default
+ * launch, so the runBlocking happens off the main thread.
  */
 class WhisperEngine(private val context: Context) : TranscriptionEngine {
 
@@ -86,15 +88,17 @@ class WhisperEngine(private val context: Context) : TranscriptionEngine {
      * @throws IllegalStateException if [initialize] has not succeeded.
      * @throws IllegalArgumentException if [sampleRateHz] != 16000.
      */
-    override fun transcribe(floatPcm: FloatArray, sampleRateHz: Int): String {
+    override suspend fun transcribe(floatPcm: FloatArray, sampleRateHz: Int): String {
         require(sampleRateHz == 16_000) {
             "WhisperEngine requires 16 kHz input, got $sampleRateHz"
         }
         val ctx = ctxRef.get()
             ?: throw IllegalStateException("WhisperEngine not initialized")
-        val text = runBlocking {
-            ctx.transcribeData(floatPcm, printTimestamp = false)
-        }
+        // F3.4 (2026-05-09): now suspends. The interface is `suspend fun transcribe(...)`
+        // (see TranscriptionEngine.kt rationale). [WhisperContext.transcribeData] is
+        // already a `suspend` function in the upstream Kotlin bindings, so we just await
+        // it directly — no `runBlocking` needed.
+        val text = ctx.transcribeData(floatPcm, printTimestamp = false)
         return text.trim()
     }
 
