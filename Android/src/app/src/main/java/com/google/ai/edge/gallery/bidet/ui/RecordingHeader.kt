@@ -50,9 +50,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.ai.edge.gallery.R
 import kotlinx.coroutines.delay
 
 /**
@@ -135,7 +137,10 @@ fun RecordingHeader(
                 contentColor = MaterialTheme.colorScheme.onError,
             ),
         ) {
-            Icon(Icons.Filled.Stop, contentDescription = null)
+            Icon(
+                Icons.Filled.Stop,
+                contentDescription = stringResource(R.string.bidet_stop_button),
+            )
             Spacer(modifier = Modifier.width(6.dp))
             Text("STOP", fontWeight = FontWeight.Bold)
         }
