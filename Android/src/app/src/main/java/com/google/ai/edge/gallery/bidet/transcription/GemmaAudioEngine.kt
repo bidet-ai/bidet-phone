@@ -28,6 +28,8 @@ import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.SamplerConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -44,8 +46,14 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * Pipeline per chunk:
  *   1. AudioCaptureEngine writes 30-sec int16 PCM at 16 kHz to a chunk file.
  *   2. TranscriptionWorker calls `int16ToFloat32` then `transcribe(floatPcm, 16_000)`.
- *   3. We convert back to int16 PCM bytes (Content.AudioBytes wants int16 16 kHz mono).
- *   4. Send `Contents.of(Content.AudioBytes(pcmBytes), Content.Text("Transcribe verbatim."))`
+ *   3. We re-encode the Float32 samples to a 44-byte RIFF/WAVE header + int16 little-endian
+ *      PCM body. **The WAV header is required:** LiteRT-LM 0.11 decodes
+ *      [Content.AudioBytes] via MiniAudio's `ma_decoder_init_memory()`, which only accepts
+ *      container formats (WAV / FLAC / MP3). Headerless raw PCM is silently rejected by the
+ *      audio preprocessor — the model sees no audio context, returns an empty string, and
+ *      the user gets an empty RAW transcript with no error surface. This was the
+ *      "Tonight, two attempts, two failures" symptom on 2026-05-09.
+ *   4. Send `Contents.of(Content.AudioBytes(wavBytes), Content.Text("Transcribe verbatim."))`
  *      to a Conversation.
  *   5. Collect MessageCallback.onMessage stream, return the joined text.
  *
@@ -123,10 +131,17 @@ class GemmaAudioEngine @Inject constructor(
             }
             val conv = engine.createConversation(
                 ConversationConfig(
+                    // 2026-05-09 fix: temperature=0.0 with topK/topP set is mathematically
+                    // incoherent (greedy/argmax + nucleus sampling) and some LiteRT-LM
+                    // sampler paths divide-by-zero on it. For verbatim transcription we
+                    // want effectively-deterministic output without the degenerate edge
+                    // case — temperature=0.05 is the standard "low entropy, well defined"
+                    // setting. The chat client uses 0.4+; we stay much lower because
+                    // creative sampling on transcription introduces hallucinated words.
                     samplerConfig = SamplerConfig(
                         topK = 40,
                         topP = 0.95,
-                        temperature = 0.0,
+                        temperature = TRANSCRIBE_TEMPERATURE,
                     ),
                     systemInstruction = Contents.of(SYSTEM_PROMPT),
                     tools = emptyList(),
@@ -172,7 +187,9 @@ class GemmaAudioEngine @Inject constructor(
             floatPcm.copyOfRange(floatPcm.size - maxSamples, floatPcm.size)
         } else floatPcm
 
-        val pcmBytes = float32ToInt16Bytes(samples)
+        // 2026-05-09 fix: wrap the int16 PCM in a 44-byte RIFF/WAVE header before handing
+        // off to LiteRT-LM. See [float32ToWavBytes] kdoc + class-level kdoc for why.
+        val wavBytes = float32ToWavBytes(samples, sampleRateHz)
 
         return suspendCancellableCoroutine { cont ->
             val sb = StringBuilder()
@@ -196,7 +213,7 @@ class GemmaAudioEngine @Inject constructor(
                 conv.sendMessageAsync(
                     Contents.of(
                         listOf(
-                            Content.AudioBytes(pcmBytes),
+                            Content.AudioBytes(wavBytes),
                             Content.Text(
                                 "Transcribe the speech verbatim. Output only the transcription, no commentary.",
                             ),
@@ -236,18 +253,6 @@ class GemmaAudioEngine @Inject constructor(
         }
     }
 
-    /** Convert normalized Float32 [-1, 1] → little-endian int16 PCM bytes. */
-    private fun float32ToInt16Bytes(floatPcm: FloatArray): ByteArray {
-        val out = ByteArray(floatPcm.size * 2)
-        for (i in floatPcm.indices) {
-            val v = max(-1f, min(1f, floatPcm[i])) * 32767f
-            val s = v.toInt()
-            out[i * 2] = (s and 0xFF).toByte()
-            out[i * 2 + 1] = ((s ushr 8) and 0xFF).toByte()
-        }
-        return out
-    }
-
     companion object {
         private const val TAG = "BidetGemmaAudioEngine"
         // v0.2 (2026-05-09): bumped 1024 → 16384 to match the chat path. Two consequences:
@@ -260,6 +265,10 @@ class GemmaAudioEngine @Inject constructor(
         //      (LiteRT error: "1064 ≥ 1024"). 16384 gives plenty of headroom on both paths
         //      and is still well below Gemma 4 E4B's 128k context window.
         private const val MAX_OUTPUT_TOKENS = 16384
+        // 2026-05-09: see ConversationConfig comment in [initialize]. 0.0 is the degenerate
+        // case we're moving off of; 0.05 keeps the sampler well-defined while still being
+        // effectively deterministic for verbatim transcription.
+        private const val TRANSCRIBE_TEMPERATURE: Double = 0.05
         private const val SYSTEM_PROMPT =
             "You are a verbatim transcription engine. Output only the spoken words exactly as said. " +
                 "No timestamps, no speaker labels, no commentary, no punctuation cleanup beyond the natural sentence boundaries. " +
@@ -279,3 +288,75 @@ internal fun gemmaAudioTruncatedTail(floatPcm: FloatArray, maxSamples: Int): Flo
         floatPcm.copyOfRange(floatPcm.size - maxSamples, floatPcm.size)
     } else floatPcm
 }
+
+/**
+ * 2026-05-09: pure-Kotlin helper extracted for unit testing. Encodes Float32 mono samples
+ * (range ±1.0) as a complete RIFF/WAVE container: 44-byte canonical PCM header followed by
+ * little-endian int16 PCM samples.
+ *
+ * Why this exists: LiteRT-LM 0.11's audio preprocessor uses MiniAudio's
+ * `ma_decoder_init_memory()`, which only accepts container formats (WAV / FLAC / MP3).
+ * Headerless raw PCM bytes are silently rejected — the audio executor decodes 0 frames,
+ * the model sees no audio context, the user gets an empty transcript with no error
+ * surface. Wrapping the PCM in a 44-byte canonical RIFF/WAVE header is the minimum-viable
+ * fix; the same header layout is already used by [com.google.ai.edge.gallery.bidet.audio.WavConcatenator]
+ * for the on-disk session WAV, so the format is well-known to work in this stack.
+ *
+ * The header is 44 bytes; the body is `2 * floatPcm.size` bytes (one int16 per sample).
+ *
+ * @param floatPcm normalized Float32 mono samples, clipped to ±1.0 then scaled to int16.
+ * @param sampleRateHz sample rate in Hz; must match what the AudioCaptureEngine produced.
+ * @return a complete WAV file as a ByteArray (header + interleaved-but-mono samples).
+ */
+internal fun float32ToWavBytes(floatPcm: FloatArray, sampleRateHz: Int): ByteArray {
+    require(sampleRateHz > 0) { "sampleRateHz must be positive, got $sampleRateHz" }
+    val dataLen = floatPcm.size * 2
+    val out = ByteArray(WAV_HEADER_SIZE + dataLen)
+
+    // --- Header (44 bytes, RIFF/WAVE PCM mono 16-bit) ---
+    val channels = 1
+    val bitsPerSample = 16
+    val byteRate = sampleRateHz * channels * bitsPerSample / 8
+    val blockAlign = channels * bitsPerSample / 8
+    val bb = ByteBuffer.wrap(out, 0, WAV_HEADER_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+    // "RIFF"
+    bb.put('R'.code.toByte()); bb.put('I'.code.toByte()); bb.put('F'.code.toByte()); bb.put('F'.code.toByte())
+    // ChunkSize = 36 + dataLen
+    bb.putInt(36 + dataLen)
+    // "WAVE"
+    bb.put('W'.code.toByte()); bb.put('A'.code.toByte()); bb.put('V'.code.toByte()); bb.put('E'.code.toByte())
+    // "fmt "
+    bb.put('f'.code.toByte()); bb.put('m'.code.toByte()); bb.put('t'.code.toByte()); bb.put(' '.code.toByte())
+    // Subchunk1Size = 16 (PCM)
+    bb.putInt(16)
+    // AudioFormat = 1 (PCM)
+    bb.putShort(1)
+    // NumChannels
+    bb.putShort(channels.toShort())
+    // SampleRate
+    bb.putInt(sampleRateHz)
+    // ByteRate
+    bb.putInt(byteRate)
+    // BlockAlign
+    bb.putShort(blockAlign.toShort())
+    // BitsPerSample
+    bb.putShort(bitsPerSample.toShort())
+    // "data"
+    bb.put('d'.code.toByte()); bb.put('a'.code.toByte()); bb.put('t'.code.toByte()); bb.put('a'.code.toByte())
+    // Subchunk2Size
+    bb.putInt(dataLen)
+
+    // --- Body: clipped Float32 → int16 LE ---
+    var off = WAV_HEADER_SIZE
+    for (i in floatPcm.indices) {
+        val clipped = max(-1f, min(1f, floatPcm[i]))
+        val s = (clipped * 32767f).toInt()
+        out[off] = (s and 0xFF).toByte()
+        out[off + 1] = ((s ushr 8) and 0xFF).toByte()
+        off += 2
+    }
+    return out
+}
+
+/** Canonical PCM/WAV header size in bytes — referenced by tests. */
+internal const val WAV_HEADER_SIZE: Int = 44
