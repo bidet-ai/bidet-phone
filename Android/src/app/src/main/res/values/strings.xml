@@ -47,6 +47,22 @@
   <string name="bidet_settings_send_to_tp3" translatable="false">Send to TP3</string>
   <string name="bidet_chunks_behind" translatable="false">Transcription behind by %1$d chunks</string>
   <string name="bidet_chunk_failure_marker" translatable="false">[chunk %1$d transcription failed]</string>
+  <!-- Tab 4 customizable-prompt feature (v0.2). Chip labels are user-visible copy and
+       deliberately avoid clinical terminology per banWordCheck rules — internal asset
+       filenames may differ. -->
+  <string name="bidet_tab4_chip_forai" translatable="false">FORAI (default)</string>
+  <string name="bidet_tab4_chip_dyslexic" translatable="false">Dyslexia-friendly</string>
+  <string name="bidet_tab4_chip_dysgraphic" translatable="false">Dysgraphia-friendly</string>
+  <string name="bidet_tab4_chip_tangent_organizer" translatable="false">Tangent organizer</string>
+  <string name="bidet_tab4_chip_plain_language" translatable="false">Plain language</string>
+  <string name="bidet_tab4_chip_custom" translatable="false">Custom…</string>
+  <string name="bidet_tab4_section_label" translatable="false">Output style</string>
+  <string name="bidet_tab4_sheet_title" translatable="false">Custom prompt</string>
+  <string name="bidet_tab4_sheet_hint" translatable="false">Tell Gemma exactly how to reshape your brain dump. The transcript will be supplied automatically — describe only the output you want.</string>
+  <string name="bidet_tab4_sheet_placeholder" translatable="false">e.g. Reformat for a 7th grade student with dyslexia. Use short sentences, bullet points, no idioms.</string>
+  <string name="bidet_tab4_sheet_save" translatable="false">Save and use</string>
+  <string name="bidet_tab4_sheet_cancel" translatable="false">Cancel</string>
+  <string name="bidet_tab4_idle_hint" translatable="false">Pick an output style above, then tap Generate to reshape your brain dump.</string>
   <!-- TODO(jingjin): Add translation support when i18n is ready. -->
   <string name="about_this_update" translatable="false">About this update</string>
   <string name="all" translatable="false">All</string>

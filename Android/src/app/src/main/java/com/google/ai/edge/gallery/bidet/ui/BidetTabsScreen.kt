@@ -141,7 +141,16 @@ fun BidetTabsScreen(
                         }
                         TAB_INDEX_FORAI -> {
                             val state by viewModel.foraiState.collectAsStateWithLifecycle()
-                            ForaiTabContent(state = state, onGenerate = { viewModel.generateForai() })
+                            val activePreset by viewModel.tab4ActivePreset.collectAsStateWithLifecycle()
+                            val customPrompt by viewModel.tab4CustomPrompt.collectAsStateWithLifecycle()
+                            ForaiTabContent(
+                                state = state,
+                                activePresetId = activePreset,
+                                customPrompt = customPrompt,
+                                onSelectPreset = { viewModel.setTab4Preset(it) },
+                                onSaveCustomPrompt = { viewModel.setTab4CustomPrompt(it) },
+                                onGenerate = { viewModel.generateForai() },
+                            )
                         }
                     }
                 }

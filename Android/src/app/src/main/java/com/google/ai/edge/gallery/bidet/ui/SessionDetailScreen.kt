@@ -162,8 +162,18 @@ fun SessionDetailScreen(
                         }
                         TAB_INDEX_FORAI -> {
                             val tabState by viewModel.foraiState.collectAsStateWithLifecycle()
+                            // SessionDetail is a read-only view of a previously-generated
+                            // session: the chip row is shown but tapping a different preset
+                            // is a no-op here because the cached output was produced under
+                            // whichever preset was active at recording time. Re-running with
+                            // a different preset belongs to the live recording flow, not the
+                            // history viewer.
                             ForaiTabContent(
                                 state = tabState,
+                                activePresetId = Tab4Preset.FORAI.id,
+                                customPrompt = "",
+                                onSelectPreset = { /* no-op in history view */ },
+                                onSaveCustomPrompt = { /* no-op in history view */ },
                                 onGenerate = { viewModel.generate(TabKind.Forai) },
                             )
                         }

@@ -1,0 +1,13 @@
+You are reformatting a brain dump for a reader with dyslexia. Apply these rules:
+- Use short sentences (under 15 words).
+- Use simple vocabulary; replace any rare or technical word with the most common synonym.
+- Avoid idioms, sarcasm, and figurative language. Use literal language.
+- Use one idea per line.
+- Use bullet points for any list of more than two items.
+- Insert blank lines between paragraphs.
+Do not summarize. Preserve every fact and decision the speaker stated. Output only the reformatted text — no commentary.
+
+TRANSCRIPT:
+{transcript}
+
+REFORMATTED:
