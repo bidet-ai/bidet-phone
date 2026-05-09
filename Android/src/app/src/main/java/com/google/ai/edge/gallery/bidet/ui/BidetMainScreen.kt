@@ -213,6 +213,11 @@ private fun ReadyScreen(
     val isRecording = status.isRecording
     val pipeline = status.pipeline
     val aggregator = pipeline?.aggregator
+    // F2.1 (2026-05-09): non-null when the most recent Record tap aborted because the
+    // transcription engine couldn't initialize (e.g. Whisper model missing from APK
+    // assets, Gemma not yet downloaded). Surfaced as an in-screen banner — see
+    // EngineInitFailedBanner. Cleared on the next successful start or stop.
+    val engineInitError = status.engineInitError
 
     // Hand the aggregator to the ViewModel as soon as one becomes available. This used to
     // be inline with each onToggleRecording branch, which only worked when the pipeline was
@@ -298,6 +303,10 @@ private fun ReadyScreen(
                     modifier = Modifier.padding(24.dp),
                 ) {
                     Text("Bidet AI")
+                    // F2.1 (2026-05-09): banner appears when the previous Record tap
+                    // aborted at engine init. Engine-specific copy points the user at
+                    // the actual fix.
+                    engineInitError?.let { err -> EngineInitFailedBanner(err) }
                     Text("Tap Record to begin a brain-dump.")
                     Button(onClick = onToggleRecording) { Text("Record") }
                     Button(onClick = onOpenHistory) { Text("History") }
@@ -305,6 +314,26 @@ private fun ReadyScreen(
             }
         }
     }
+}
+
+/**
+ * F2.1 (2026-05-09): inline banner shown on the welcome screen when the most recent
+ * Record tap aborted because the transcription engine couldn't initialize. Replaces
+ * the silent "[chunk N transcription failed]" cascade users used to see — they now
+ * get an engine-specific actionable message.
+ */
+@Composable
+private fun EngineInitFailedBanner(error: RecordingService.EngineInitError) {
+    val message = when (error.engine) {
+        RecordingService.EngineType.Whisper ->
+            "Whisper model file is missing — your build may be incomplete. Reinstall the APK."
+        RecordingService.EngineType.Gemma ->
+            "Gemma 4 model is not downloaded — finish first-run download from Settings."
+    }
+    Text(
+        text = message,
+        modifier = Modifier.padding(horizontal = 12.dp),
+    )
 }
 
 /**

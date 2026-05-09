@@ -32,6 +32,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.ai.edge.gallery.MainActivity
@@ -120,9 +121,31 @@ class RecordingService : Service() {
         val sessionId: String?,
         val startedAtMs: Long,
         val pipeline: Pipeline?,
+        /**
+         * F2.1 fix (2026-05-09): non-null when the most recent startRecording() attempt
+         * failed because the transcription engine could not initialize (e.g. Whisper model
+         * file missing from APK assets, Gemma model not yet downloaded). The UI binds this
+         * to a banner so the user sees an actionable message instead of the silent
+         * "[chunk N transcription failed]" cascade that bit Mark on the flavor APKs.
+         */
+        val engineInitError: EngineInitError? = null,
     )
 
-    private val _statusFlow = MutableStateFlow(Status(false, null, 0L, null))
+    /**
+     * Why the engine failed to initialize, with the engine type so the UI can render a
+     * targeted message ("Whisper model missing — reinstall APK" vs "Gemma model not
+     * downloaded — finish first-run download"). The reason string is whatever the engine
+     * surfaced in its own initialize() catch block — included for the developer log only;
+     * the UI uses [engine] to pick the user-visible copy.
+     */
+    data class EngineInitError(
+        val engine: EngineType,
+        val reason: String,
+    )
+
+    enum class EngineType { Whisper, Gemma }
+
+    private val _statusFlow = MutableStateFlow(Status(false, null, 0L, null, null))
     val statusFlow: StateFlow<Status> = _statusFlow.asStateFlow()
 
     /**
@@ -182,17 +205,68 @@ class RecordingService : Service() {
             return
         }
 
-        startForegroundCompat()
-        if (!requestAudioFocus()) {
-            Log.w(TAG, "Audio focus denied — proceeding anyway.")
-        }
         val sessionId = UUID.randomUUID().toString()
         val chunkQueue = ChunkQueue()
         val aggregator = TranscriptAggregator()
         // Pick engine per Gradle product flavor (BuildConfig.USE_GEMMA_AUDIO).
         // whisper flavor → WhisperEngine. gemma flavor → GemmaAudioEngine.
-        val transcriptionEngine = TranscriptionEngine.create(applicationContext)
-            .also { it.initialize() }
+        //
+        // F2.1 fix (2026-05-09): previously the `.also { it.initialize() }` discarded the
+        // boolean return value. When init failed (e.g. the user's APK was assembled without
+        // the bundled Whisper model — exactly the bug that bit Mark on the gemma flavor
+        // build), the audio capture loop still started, every chunk fell through to the
+        // failure-marker path, and the user saw "[chunk N transcription failed]" with no
+        // explanation. The gate below runs initialize() and returns InitFailed if it
+        // returned false; the failure-row insert + native-resource close happen inside
+        // the gate so RecordingService stays focused on Service lifecycle. See
+        // [EngineInitGate] for the testable kernel of this decision.
+        val transcriptionEngine = engineFactory(applicationContext)
+        when (val outcome = EngineInitGate.tryInit(
+            engine = transcriptionEngine,
+            sessionId = sessionId,
+            now = System.currentTimeMillis(),
+            classifyEngine = ::engineTypeOf,
+        )) {
+            is EngineInitGate.Outcome.InitFailed -> {
+                Log.e(
+                    TAG,
+                    "Transcription engine init failed (engine=${outcome.engine}) — refusing to start capture pipeline.",
+                )
+                // Persist the failure row so it shows up in History as a terminal failure
+                // rather than an empty in-progress session that never finalizes.
+                scope.launch {
+                    try {
+                        sessionDao.insert(outcome.failureRow)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Failed to insert engine_init_failed row: ${t.message}", t)
+                    }
+                }
+                // Surface to the UI + tear ourselves down. Note we have NOT yet promoted
+                // to foreground (deferred until after init succeeds), so all we need to
+                // do is emit the failure status and stopSelf().
+                _statusFlow.value = Status(
+                    isRecording = false,
+                    sessionId = null,
+                    startedAtMs = 0L,
+                    pipeline = null,
+                    engineInitError = EngineInitError(
+                        engine = outcome.engine,
+                        reason = ENGINE_INIT_FAILED_NOTE,
+                    ),
+                )
+                stopSelf()
+                return
+            }
+            EngineInitGate.Outcome.Ready -> { /* fall through to start the pipeline */ }
+        }
+        // Defer foreground promotion until after the engine init succeeds. Promoting before
+        // the bail-out path above would leave the user staring at the "Recording…" notification
+        // for a session that immediately tore itself down. Acquire audio focus only when we're
+        // committing to actually capture audio.
+        startForegroundCompat()
+        if (!requestAudioFocus()) {
+            Log.w(TAG, "Audio focus denied — proceeding anyway.")
+        }
         val worker = TranscriptionWorker(
             chunkQueue = chunkQueue,
             transcriptionEngine = transcriptionEngine,
@@ -204,7 +278,30 @@ class RecordingService : Service() {
             chunkQueue = chunkQueue,
             sessionId = sessionId,
         )
-        worker.start()
+        // F2.1 (2026-05-09): worker.start() now also returns false on a not-ready engine
+        // (defence-in-depth — the gate above already gated on initialize(), but if the
+        // worker is ever wired up directly elsewhere we don't want it to silently spin a
+        // consumer that turns every chunk into a failure marker). On the happy path here
+        // the engine is ready, so this is always true.
+        if (!worker.start()) {
+            Log.e(TAG, "TranscriptionWorker refused to start — engine reported not ready post-init.")
+            try { transcriptionEngine.close() } catch (_: Throwable) {}
+            tearDownForeground()
+            abandonAudioFocus()
+            // Don't re-insert a session row — the gate above already covered the
+            // not-ready case. Just emit the banner state.
+            _statusFlow.value = Status(
+                isRecording = false,
+                sessionId = null,
+                startedAtMs = 0L,
+                pipeline = null,
+                engineInitError = EngineInitError(
+                    engine = engineTypeOf(transcriptionEngine),
+                    reason = ENGINE_INIT_FAILED_NOTE,
+                ),
+            )
+            return
+        }
         captureEngine.start()
         pipeline = Pipeline(
             sessionId = sessionId,
@@ -227,6 +324,7 @@ class RecordingService : Service() {
             sessionId = sessionId,
             startedAtMs = sessionStartedAtMs,
             pipeline = pipeline,
+            engineInitError = null,
         )
         scope.launch {
             try {
@@ -296,7 +394,9 @@ class RecordingService : Service() {
 
         // Bug B (2026-05-09): emit recorded-stopped state so the UI flips back to the
         // welcome screen. The session row finalize keeps running on `scope` below.
-        _statusFlow.value = Status(false, null, 0L, null)
+        // Clear any prior engine-init banner — a successful stop after a successful start
+        // means the engine was fine.
+        _statusFlow.value = Status(false, null, 0L, null, null)
 
         if (sessionId != null && recordingStartedAt > 0L) {
             scope.launch {
@@ -351,6 +451,31 @@ class RecordingService : Service() {
             } finally {
                 withContext(Dispatchers.Main) { stopSelf() }
             }
+        }
+    }
+
+    /**
+     * F2.1 (2026-05-09): pluggable factory + engine-type classifier. Production keeps the
+     * default which delegates to [TranscriptionEngine.create] (flavor-driven). The
+     * pure-Kotlin failure decision lives in [EngineInitGate] (unit-tested in
+     * `EngineInitGateTest`); this var stays here so a future Robolectric integration test
+     * can swap in a fake without touching production wiring. Kept as `internal var` rather
+     * than a full dagger module rewire because this is a correctness fix, not a refactor.
+     */
+    @VisibleForTesting
+    internal var engineFactory: (Context) -> TranscriptionEngine = { ctx ->
+        TranscriptionEngine.create(ctx)
+    }
+
+    private fun engineTypeOf(engine: TranscriptionEngine): EngineType {
+        // Use class simple name rather than `is` because referencing GemmaAudioEngine /
+        // WhisperEngine directly would tie the service to both classes; the existing
+        // codebase already keeps RecordingService engine-agnostic via the factory. The
+        // simple-name check stays correct under R8 since both engine classes are kept by
+        // proguard-rules (they're the only impls of the interface).
+        return when (engine.javaClass.simpleName) {
+            "GemmaAudioEngine" -> EngineType.Gemma
+            else -> EngineType.Whisper
         }
     }
 
@@ -517,6 +642,14 @@ class RecordingService : Service() {
         const val NOTIFICATION_ID = 1101
         const val ACTION_START = "ai.bidet.phone.action.START_RECORDING"
         const val ACTION_STOP = "ai.bidet.phone.action.STOP_RECORDING"
+
+        /**
+         * F2.1 (2026-05-09): persisted on the [BidetSession.notes] column when a recording
+         * attempt aborts because the transcription engine could not initialize. Surfaced
+         * by SessionsListScreen as "engine init failed" instead of an empty in-progress
+         * row that never finalizes.
+         */
+        const val ENGINE_INIT_FAILED_NOTE: String = "engine_init_failed"
 
         fun startIntent(context: Context): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_START)
