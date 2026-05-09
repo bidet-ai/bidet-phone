@@ -217,3 +217,4 @@ at commit `ad7aad854ba34bf205922ddc12cca6cc7fb4f0ae` (2026-05-07). See
 upstream files are kept under the original Apache 2.0 license; modified files
 carry a `Modifications Copyright 2026 bidet-ai contributors. Changed: ...`
 line directly below the upstream copyright header (per Apache 2.0 §4(b)).
+
