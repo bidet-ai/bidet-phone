@@ -51,13 +51,29 @@ class TranscriptionWorker(
 
     private var job: Job? = null
 
-    /** Spawn the consumer coroutine. Idempotent — second calls return without spawning. */
-    fun start() {
-        if (job != null) return
-        // Make sure the engine is ready before we begin consuming. If init fails, every chunk
-        // will fall through to the failure-marker path; we still want the loop to run so the
-        // aggregator's RAW transcript reflects what was attempted.
-        if (!transcriptionEngine.isReady) transcriptionEngine.initialize()
+    /**
+     * Spawn the consumer coroutine. Idempotent — second calls return `true` without spawning
+     * a second job (engine state is unchanged from the original spawn).
+     *
+     * F2.1 (2026-05-09): returns `false` when the engine cannot be initialized. Previously
+     * we tried `transcriptionEngine.initialize()` and discarded the result, then started the
+     * consumer loop anyway — every chunk fell through to the failure-marker path and the
+     * user saw "[chunk N transcription failed]" forever. Now the worker refuses to start
+     * and the caller (RecordingService) tears the recording down with an actionable
+     * engine-init-failed banner.
+     *
+     * @return `true` if the consumer is now running (or was already running), `false` if
+     *   the engine could not be brought to a ready state and no job was spawned.
+     */
+    fun start(): Boolean {
+        if (job != null) return true
+        // Make sure the engine is ready before we begin consuming. If init returns false the
+        // engine is unusable — refuse to spawn the consumer rather than spinning a loop that
+        // turns every chunk into a failure marker.
+        if (!transcriptionEngine.isReady && !transcriptionEngine.initialize()) {
+            Log.e(TAG, "transcriptionEngine.initialize() returned false — refusing to start consumer.")
+            return false
+        }
 
         job = scope.launch {
             // Merge the audio flow with the markers flow so dropped chunks also get a marker.
@@ -76,6 +92,7 @@ class TranscriptionWorker(
                 }
             }
         }
+        return true
     }
 
     /** Cancel the consumer coroutine. */
