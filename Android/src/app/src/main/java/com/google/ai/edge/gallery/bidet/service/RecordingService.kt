@@ -28,9 +28,13 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
@@ -104,6 +108,7 @@ class RecordingService : Service() {
     private var pipeline: Pipeline? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var paused: Boolean = false
+    private var capWatcherJob: Job? = null
 
     /**
      * 2026-05-09 (Bug B fix): observable status for the UI.
@@ -359,6 +364,12 @@ class RecordingService : Service() {
                 }
             }
         }
+
+        // 2026-05-09: launch the recording-time-cap watcher. Vibrates at WARN_VISUAL_MS,
+        // beeps once per second from WARN_AUDIBLE_START_MS through HARD_CAP_MS, then calls
+        // stopRecording() at HARD_CAP_MS. Cancelled by stopRecording() if the user taps
+        // STOP early — Sink.beepOnce will not fire after cancellation.
+        capWatcherJob = capWatcherFactory(this).start(scope, sessionStartedAtMs)
     }
 
     /**
@@ -400,6 +411,12 @@ class RecordingService : Service() {
 
         sessionPersistJob?.cancel()
         sessionPersistJob = null
+
+        // Cap-watcher cancellation MUST run before we clear `pipeline` — the watcher's
+        // beep coroutine is what stops mid-cadence when the user taps STOP early
+        // (spec contract: "if the user taps STOP early, the beeps STOP").
+        capWatcherJob?.cancel()
+        capWatcherJob = null
 
         // Synchronous half: stop capture (so no NEW chunks land), drop the pipeline ref,
         // flip the UI status flow, abandon audio focus. Everything that needs the
@@ -495,6 +512,80 @@ class RecordingService : Service() {
     @VisibleForTesting
     internal var engineFactory: (Context) -> TranscriptionEngine = { ctx ->
         TranscriptionEngine.create(ctx)
+    }
+
+    /**
+     * 2026-05-09: pluggable factory for the recording-time-cap watcher. Production builds the
+     * default impl wired to Vibrator + ToneGenerator + this.stopRecording(). Tests inject a
+     * fake watcher with a controllable clock + a [RecordingCapWatcher.Sink] that records calls.
+     */
+    @VisibleForTesting
+    internal var capWatcherFactory: (RecordingService) -> RecordingCapWatcher = { svc ->
+        RecordingCapWatcher(
+            sink = svc.defaultCapSink(),
+            clock = System::currentTimeMillis,
+        )
+    }
+
+    /**
+     * Production [RecordingCapWatcher.Sink]. Owns the Vibrator + ToneGenerator handles +
+     * the auto-stop hook. Kept private so the only public extension point is
+     * [capWatcherFactory] above.
+     */
+    private fun defaultCapSink(): RecordingCapWatcher.Sink = object : RecordingCapWatcher.Sink {
+        // ToneGenerator allocates a small native AudioTrack; instantiate lazily on first
+        // beep so we don't pay the cost on sub-44:50 sessions (the common case). Released
+        // when the watcher is cancelled or onHardCapReached fires — see release() inside.
+        private var tone: ToneGenerator? = null
+
+        override fun vibrateOnce() {
+            try {
+                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val mgr = getSystemService(VibratorManager::class.java)
+                    mgr?.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    getSystemService(Vibrator::class.java)
+                }
+                if (vibrator?.hasVibrator() != true) return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(
+                        VibrationEffect.createOneShot(
+                            RecordingCaps.VISUAL_WARN_VIBRATE_MS,
+                            VibrationEffect.DEFAULT_AMPLITUDE,
+                        ),
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(RecordingCaps.VISUAL_WARN_VIBRATE_MS)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "vibrateOnce threw: ${t.message}", t)
+            }
+        }
+
+        override fun beepOnce() {
+            try {
+                val gen = tone ?: ToneGenerator(AudioManager.STREAM_NOTIFICATION, BEEP_VOLUME)
+                    .also { tone = it }
+                gen.startTone(ToneGenerator.TONE_PROP_BEEP, BEEP_DURATION_MS)
+            } catch (t: Throwable) {
+                Log.w(TAG, "beepOnce threw: ${t.message}", t)
+            }
+        }
+
+        override fun onHardCapReached() {
+            Log.i(TAG, "Recording hit HARD_CAP_MS=${RecordingCaps.HARD_CAP_MS} — auto-stopping.")
+            // Same code path as a user STOP tap. stopRecording() handles the rest of the
+            // teardown including capWatcherJob cancellation (which triggers release() on
+            // this sink via the watcher's finally{}).
+            stopRecording()
+        }
+
+        override fun release() {
+            try { tone?.release() } catch (_: Throwable) {}
+            tone = null
+        }
     }
 
     private fun engineTypeOf(engine: TranscriptionEngine): EngineType {
@@ -680,6 +771,14 @@ class RecordingService : Service() {
          * row that never finalizes.
          */
         const val ENGINE_INIT_FAILED_NOTE: String = "engine_init_failed"
+
+        /**
+         * ToneGenerator volume + duration for the audible-warn beep. 80/100 was loud enough
+         * on the Pixel 8 Pro speaker without being alarming; 200 ms is short enough to leave
+         * audible silence between the 1 s cadence ticks.
+         */
+        private const val BEEP_VOLUME: Int = 80
+        private const val BEEP_DURATION_MS: Int = 200
 
         fun startIntent(context: Context): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_START)
