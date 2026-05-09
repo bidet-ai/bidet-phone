@@ -24,8 +24,6 @@ import com.google.ai.edge.gallery.proto.Cutout
 import com.google.ai.edge.gallery.proto.CutoutCollection
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Settings
-import com.google.ai.edge.gallery.proto.Skill
-import com.google.ai.edge.gallery.proto.Skills
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.proto.UserData
 import kotlinx.coroutines.flow.first
@@ -65,10 +63,6 @@ interface DataStoreRepository {
 
   fun acceptGemmaTermsOfUse()
 
-  fun getHasRunTinyGarden(): Boolean
-
-  fun setHasRunTinyGarden(hasRun: Boolean)
-
   fun addCutout(cutout: Cutout)
 
   fun getAllCutouts(): List<Cutout>
@@ -87,20 +81,6 @@ interface DataStoreRepository {
 
   fun deleteBenchmarkResult(index: Int)
 
-  fun addSkill(skill: Skill)
-
-  fun setSkills(skills: List<Skill>)
-
-  fun setSkillSelected(skill: Skill, selected: Boolean)
-
-  fun setAllSkillsSelected(selected: Boolean)
-
-  fun getAllSkills(): List<Skill>
-
-  fun deleteSkill(name: String)
-
-  suspend fun deleteSkills(names: Set<String>)
-
   /** Records that a promo with the specified ID has been viewed. */
   fun addViewedPromoId(promoId: String)
 
@@ -117,7 +97,6 @@ class DefaultDataStoreRepository(
   private val userDataDataStore: DataStore<UserData>,
   private val cutoutDataStore: DataStore<CutoutCollection>,
   private val benchmarkResultsDataStore: DataStore<BenchmarkResults>,
-  private val skillsDataStore: DataStore<Skills>,
 ) : DataStoreRepository {
   override fun saveTextInputHistory(history: List<String>) {
     runBlocking {
@@ -248,19 +227,6 @@ class DefaultDataStoreRepository(
     }
   }
 
-  override fun getHasRunTinyGarden(): Boolean {
-    return runBlocking {
-      val settings = dataStore.data.first()
-      settings.hasRunTinyGarden
-    }
-  }
-
-  override fun setHasRunTinyGarden(hasRun: Boolean) {
-    runBlocking {
-      dataStore.updateData { settings -> settings.toBuilder().setHasRunTinyGarden(hasRun).build() }
-    }
-  }
-
   override fun addCutout(cutout: Cutout) {
     runBlocking {
       cutoutDataStore.updateData { cutouts -> cutouts.toBuilder().addCutout(cutout).build() }
@@ -330,79 +296,6 @@ class DefaultDataStoreRepository(
         val newResults = results.toBuilder().removeResult(index).build()
         newResults
       }
-    }
-  }
-
-  override fun addSkill(skill: Skill) {
-    runBlocking {
-      skillsDataStore.updateData { skills ->
-        val newSkills = buildList {
-          add(skill)
-          addAll(skills.skillList)
-        }
-        skills.toBuilder().clearSkill().addAllSkill(newSkills).build()
-      }
-    }
-  }
-
-  override fun setSkills(skills: List<Skill>) {
-    runBlocking {
-      skillsDataStore.updateData { curSkills ->
-        curSkills.toBuilder().clearSkill().addAllSkill(skills).build()
-      }
-    }
-  }
-
-  override fun setSkillSelected(skill: Skill, selected: Boolean) {
-    runBlocking {
-      skillsDataStore.updateData { skills ->
-        val newSkills = mutableListOf<Skill>()
-        for (curSkill in skills.skillList) {
-          if (curSkill.name == skill.name) {
-            newSkills.add(curSkill.toBuilder().setSelected(selected).build())
-          } else {
-            newSkills.add(curSkill)
-          }
-        }
-        Skills.newBuilder().addAllSkill(newSkills).build()
-      }
-    }
-  }
-
-  override fun setAllSkillsSelected(selected: Boolean) {
-    runBlocking {
-      skillsDataStore.updateData { skills ->
-        val newSkills = mutableListOf<Skill>()
-        for (curSkill in skills.skillList) {
-          newSkills.add(curSkill.toBuilder().setSelected(selected).build())
-        }
-        Skills.newBuilder().addAllSkill(newSkills).build()
-      }
-    }
-  }
-
-  override fun getAllSkills(): List<Skill> {
-    return runBlocking { skillsDataStore.data.first().skillList }
-  }
-
-  override fun deleteSkill(name: String) {
-    runBlocking {
-      skillsDataStore.updateData { skills ->
-        val newSkills = mutableListOf<Skill>()
-        for (skill in skills.skillList) {
-          if (skill.name != name) {
-            newSkills.add(skill)
-          }
-        }
-        Skills.newBuilder().addAllSkill(newSkills).build()
-      }
-    }
-  }
-
-  override suspend fun deleteSkills(names: Set<String>) {
-    skillsDataStore.updateData { skills ->
-      val newSkills = skills.skillList.filter { it.name !in names }
-      skills.toBuilder().clearSkill().addAllSkill(newSkills).build()
     }
   }
 

@@ -26,7 +26,6 @@ import com.google.ai.edge.gallery.BenchmarkResultsSerializer
 import com.google.ai.edge.gallery.CutoutsSerializer
 import com.google.ai.edge.gallery.GalleryLifecycleProvider
 import com.google.ai.edge.gallery.SettingsSerializer
-import com.google.ai.edge.gallery.SkillsSerializer
 import com.google.ai.edge.gallery.UserDataSerializer
 import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.DefaultDataStoreRepository
@@ -35,7 +34,6 @@ import com.google.ai.edge.gallery.data.DownloadRepository
 import com.google.ai.edge.gallery.proto.BenchmarkResults
 import com.google.ai.edge.gallery.proto.CutoutCollection
 import com.google.ai.edge.gallery.proto.Settings
-import com.google.ai.edge.gallery.proto.Skills
 import com.google.ai.edge.gallery.proto.UserData
 import dagger.Module
 import dagger.Provides
@@ -74,13 +72,6 @@ internal object AppModule {
   @Singleton
   fun provideBenchmarkResultsSerializer(): Serializer<BenchmarkResults> {
     return BenchmarkResultsSerializer
-  }
-
-  // Provides the SkillsSerializer
-  @Provides
-  @Singleton
-  fun provideSkillsSerializer(): Serializer<Skills> {
-    return SkillsSerializer
   }
 
   // Provides DataStore<Settings>
@@ -135,19 +126,6 @@ internal object AppModule {
     )
   }
 
-  // Provides DataStore<Skills>
-  @Provides
-  @Singleton
-  fun provideSkillsDataStore(
-    @ApplicationContext context: Context,
-    skillsSerializer: Serializer<Skills>,
-  ): DataStore<Skills> {
-    return DataStoreFactory.create(
-      serializer = skillsSerializer,
-      produceFile = { context.dataStoreFile("skills.pb") },
-    )
-  }
-
   // Provides AppLifecycleProvider
   @Provides
   @Singleton
@@ -163,14 +141,12 @@ internal object AppModule {
     userDataDataStore: DataStore<UserData>,
     cutoutsDataStore: DataStore<CutoutCollection>,
     benchmarkResultsStore: DataStore<BenchmarkResults>,
-    skillsDataStore: DataStore<Skills>,
   ): DataStoreRepository {
     return DefaultDataStoreRepository(
       dataStore,
       userDataDataStore,
       cutoutsDataStore,
       benchmarkResultsStore,
-      skillsDataStore,
     )
   }
 

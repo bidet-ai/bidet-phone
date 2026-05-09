@@ -192,11 +192,9 @@ dependencies {
   // (zero-telemetry hard rule). 4A.2 deleted the Analytics.kt stub + every upstream telemetry
   // call site; FcmMessagingService deleted (4A.1); manifest entries stripped (4A.1).
   // play-services-oss-licenses is NOT a Firebase dep so it stays.
-  // bidet-ai Phase 4A.1: androidx-documentfile is wired explicitly because upstream
-  // Gallery's customtasks/agentchat/SkillManagerViewModel.kt imports
-  // androidx.documentfile.provider.DocumentFile (used to resolve transitively through
-  // firebase). Phase 2 deletes the consuming tree; until then this keeps the build green.
-  implementation(libs.androidx.documentfile)
+  // bidet-ai: androidx-documentfile dep removed — the upstream
+  // Gallery customtasks/agentchat/SkillManagerViewModel.kt that imported it has been
+  // deleted alongside the rest of the customtasks/ tree.
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
   // bidet-ai 2026-05-08: whisper-jni dep REMOVED. It was a desktop-only JVM JAR with zero

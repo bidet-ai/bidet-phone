@@ -28,8 +28,6 @@ import com.google.ai.edge.gallery.R
  * Tasks are grouped into categories (see [category] field), which correspond to the tabs on the
  * home screen. The tab bar is hidden if only one category exists. Each task can have a list of
  * associated models (see [Model]], which are shown when the task is selected.
- *
- * To register a custom task, see [com.google.ai.edge.gallery.customtasks.common.CustomTask].
  */
 data class Task(
   /**
@@ -138,10 +136,7 @@ object BuiltInTaskId {
   const val LLM_PROMPT_LAB = "llm_prompt_lab"
   const val LLM_ASK_IMAGE = "llm_ask_image"
   const val LLM_ASK_AUDIO = "llm_ask_audio"
-  const val LLM_MOBILE_ACTIONS = "llm_mobile_actions"
-  const val LLM_TINY_GARDEN = "llm_tiny_garden"
   const val MP_SCRAPBOOK = "mp_scrapbook"
-  const val LLM_AGENT_CHAT = "llm_agent_chat"
 }
 
 private val allLegacyTaskIds: MutableSet<String> =
@@ -150,7 +145,6 @@ private val allLegacyTaskIds: MutableSet<String> =
     BuiltInTaskId.LLM_PROMPT_LAB,
     BuiltInTaskId.LLM_ASK_IMAGE,
     BuiltInTaskId.LLM_ASK_AUDIO,
-    BuiltInTaskId.LLM_AGENT_CHAT,
   )
 
 fun isLegacyTasks(id: String): Boolean {
