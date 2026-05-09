@@ -100,8 +100,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bidet-phone-debug-${{ github.sha }}
-          path: Android/src/app/build/outputs/apk/debug/*.apk
+          # 2026-05-09: glob pattern handles both flavored and unflavored builds.
+          # whisper flavor → apk/whisper/debug/app-whisper-debug.apk
+          # gemma flavor   → apk/gemma/debug/app-gemma-debug.apk
+          # No flavor      → apk/debug/app-debug.apk (legacy)
+          path: |
+            Android/src/app/build/outputs/apk/whisper/debug/*.apk
+            Android/src/app/build/outputs/apk/gemma/debug/*.apk
+            Android/src/app/build/outputs/apk/debug/*.apk
           retention-days: 14
+          if-no-files-found: error
 
       - name: Attach release APK to GitHub Release (only on tag push)
         if: startsWith(github.ref, 'refs/tags/v')

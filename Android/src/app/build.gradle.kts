@@ -73,6 +73,28 @@ android {
     }
   }
 
+  // 2026-05-09: two product flavors so we can install Whisper-based and Gemma-audio-based
+  // builds SIDE-BY-SIDE on the same Pixel 8 Pro for A/B comparison. Each flavor produces a
+  // distinct APK with a distinct applicationId, so they coexist with separate icons +
+  // separate app data. Differs only in the transcription engine: Whisper vs Gemma 4 audio.
+  flavorDimensions += "engine"
+  productFlavors {
+    create("whisper") {
+      dimension = "engine"
+      applicationIdSuffix = ".whisper"
+      versionNameSuffix = "-whisper"
+      resValue("string", "bidet_app_name_flavor", "Bidet AI · Whisper")
+      buildConfigField("boolean", "USE_GEMMA_AUDIO", "false")
+    }
+    create("gemma") {
+      dimension = "engine"
+      applicationIdSuffix = ".gemma"
+      versionNameSuffix = "-gemma"
+      resValue("string", "bidet_app_name_flavor", "Bidet AI · Gemma")
+      buildConfigField("boolean", "USE_GEMMA_AUDIO", "true")
+    }
+  }
+
   // bidet-ai 2026-05-08: NDK pinned to a recent stable that supports arm64-v8a fp16
   // (ARMv8.2-A) intrinsics required for whisper_v8fp16_va variant. AGP auto-installs.
   ndkVersion = "27.0.12077973"

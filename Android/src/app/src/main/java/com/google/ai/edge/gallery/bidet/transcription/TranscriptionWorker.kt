@@ -44,7 +44,7 @@ import kotlinx.coroutines.withContext
  */
 class TranscriptionWorker(
     private val chunkQueue: ChunkQueue,
-    private val whisperEngine: WhisperEngine,
+    private val transcriptionEngine: TranscriptionEngine,
     private val aggregator: TranscriptAggregator,
     private val scope: CoroutineScope,
 ) {
@@ -57,7 +57,7 @@ class TranscriptionWorker(
         // Make sure the engine is ready before we begin consuming. If init fails, every chunk
         // will fall through to the failure-marker path; we still want the loop to run so the
         // aggregator's RAW transcript reflects what was attempted.
-        if (!whisperEngine.isReady) whisperEngine.initialize()
+        if (!transcriptionEngine.isReady) transcriptionEngine.initialize()
 
         job = scope.launch {
             // Merge the audio flow with the markers flow so dropped chunks also get a marker.
@@ -95,8 +95,8 @@ class TranscriptionWorker(
         // Heavy lifting (Whisper) is CPU-bound — push onto Dispatchers.Default so we
         // don't compete with the audio capture loop for a single thread.
         val text = withContext(NonCancellable + Dispatchers.Default) {
-            val floatPcm = whisperEngine.int16ToFloat32(chunk.bytes)
-            whisperEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
+            val floatPcm = transcriptionEngine.int16ToFloat32(chunk.bytes)
+            transcriptionEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
         }
         withContext(NonCancellable) {
             aggregator.append(idx = chunk.idx, startMs = chunk.startMs, text = text)
