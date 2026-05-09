@@ -48,12 +48,12 @@ import java.util.concurrent.atomic.AtomicReference
  * Safe because [TranscriptionWorker] already wraps [transcribe] in `withContext(Dispatchers.Default)`
  * — the runBlocking happens off the main thread.
  */
-class WhisperEngine(private val context: Context) {
+class WhisperEngine(private val context: Context) : TranscriptionEngine {
 
     private val ctxRef = AtomicReference<WhisperContext?>()
 
     /** True once the model has been copied out of assets and the native context is loaded. */
-    val isReady: Boolean get() = ctxRef.get() != null
+    override val isReady: Boolean get() = ctxRef.get() != null
 
     /**
      * One-time initialization. Safe to call multiple times — subsequent calls are no-ops.
@@ -61,7 +61,7 @@ class WhisperEngine(private val context: Context) {
      *   could not be created.
      */
     @Synchronized
-    fun initialize(): Boolean {
+    override fun initialize(): Boolean {
         if (isReady) return true
         return try {
             val modelPath = ensureModelOnDisk()
@@ -86,7 +86,7 @@ class WhisperEngine(private val context: Context) {
      * @throws IllegalStateException if [initialize] has not succeeded.
      * @throws IllegalArgumentException if [sampleRateHz] != 16000.
      */
-    fun transcribe(floatPcm: FloatArray, sampleRateHz: Int = 16_000): String {
+    override fun transcribe(floatPcm: FloatArray, sampleRateHz: Int): String {
         require(sampleRateHz == 16_000) {
             "WhisperEngine requires 16 kHz input, got $sampleRateHz"
         }
@@ -100,7 +100,7 @@ class WhisperEngine(private val context: Context) {
 
     /** Release native resources. Idempotent. */
     @Synchronized
-    fun close() {
+    override fun close() {
         ctxRef.getAndSet(null)?.let {
             try {
                 runBlocking { it.release() }
@@ -126,24 +126,6 @@ class WhisperEngine(private val context: Context) {
             }
         }
         return dest
-    }
-
-    /**
-     * Convert int16 little-endian PCM bytes into a normalized Float32 array. Used by
-     * [TranscriptionWorker] before each [transcribe] call.
-     */
-    fun int16ToFloat32(pcmBytes: ByteArray): FloatArray {
-        val out = FloatArray(pcmBytes.size / 2)
-        var j = 0
-        var i = 0
-        while (i + 1 < pcmBytes.size) {
-            val lo = pcmBytes[i].toInt() and 0xFF
-            val hi = pcmBytes[i + 1].toInt()
-            val sample = (lo or (hi shl 8)).toShort().toInt()
-            out[j++] = sample / 32_768f
-            i += 2
-        }
-        return out
     }
 
     companion object {

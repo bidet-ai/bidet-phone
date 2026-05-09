@@ -42,8 +42,8 @@ import com.google.ai.edge.gallery.bidet.chunk.ChunkQueue
 import com.google.ai.edge.gallery.bidet.data.BidetSession
 import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
+import com.google.ai.edge.gallery.bidet.transcription.TranscriptionEngine
 import com.google.ai.edge.gallery.bidet.transcription.TranscriptionWorker
-import com.google.ai.edge.gallery.bidet.transcription.WhisperEngine
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -89,7 +89,7 @@ class RecordingService : Service() {
         val captureEngine: AudioCaptureEngine,
         val chunkQueue: ChunkQueue,
         val aggregator: TranscriptAggregator,
-        val whisperEngine: WhisperEngine,
+        val transcriptionEngine: TranscriptionEngine,
         val worker: TranscriptionWorker,
     )
 
@@ -189,10 +189,13 @@ class RecordingService : Service() {
         val sessionId = UUID.randomUUID().toString()
         val chunkQueue = ChunkQueue()
         val aggregator = TranscriptAggregator()
-        val whisperEngine = WhisperEngine(applicationContext).also { it.initialize() }
+        // Pick engine per Gradle product flavor (BuildConfig.USE_GEMMA_AUDIO).
+        // whisper flavor → WhisperEngine. gemma flavor → GemmaAudioEngine.
+        val transcriptionEngine = TranscriptionEngine.create(applicationContext)
+            .also { it.initialize() }
         val worker = TranscriptionWorker(
             chunkQueue = chunkQueue,
-            whisperEngine = whisperEngine,
+            transcriptionEngine = transcriptionEngine,
             aggregator = aggregator,
             scope = scope,
         )
@@ -208,7 +211,7 @@ class RecordingService : Service() {
             captureEngine = captureEngine,
             chunkQueue = chunkQueue,
             aggregator = aggregator,
-            whisperEngine = whisperEngine,
+            transcriptionEngine = transcriptionEngine,
             worker = worker,
         )
 
@@ -286,7 +289,7 @@ class RecordingService : Service() {
             it.captureEngine.stop()
             it.worker.stop()
             it.chunkQueue.close()
-            it.whisperEngine.close()
+            it.transcriptionEngine.close()
         }
         pipeline = null
         abandonAudioFocus()
