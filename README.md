@@ -4,21 +4,49 @@
   <img src="branding/bidet-ai_icon.png" alt="Bidet AI logo" width="180" />
 </p>
 
-Offline voice brain-dump cleaner for Android, built for college students with
-attention-related learning differences who want to capture lectures and turn
-spoken thinking into something they can actually study from. Talk a thought
-out loud; get back a clean transcript, an organized analysis, and an AI-ready
-structured prompt — all generated locally on your phone. No cloud. No telemetry.
+**Brain dumps are messy. Bidet AI cleans them up.**
 
-> **Status:** v0.1, contest build for the Google Gemma 2026 Challenge
+Built for people whose brains move faster than their fingers — students
+who lose ideas to the mechanical friction of typing, readers and writers
+whose thinking outruns the keyboard. Talk a thought out loud; get back
+a clean transcript, an organized analysis, and an AI-ready structured
+prompt — all generated locally on your phone. No cloud. No telemetry.
+
+> **Status:** v0.2, contest build for the Google Gemma 2026 Challenge
 > (submission deadline 2026-05-24). Primary target device: Pixel 8 Pro
 > (Android 15+). First-run Gemma 4 model download is ~3.7 GB.
 >
-> **Verified contest-fit:** the research dossier supporting this use-case lives at
-> [reports.thebarnetts.info/r/2026-05-09-brain-dump-research](https://reports.thebarnetts.info/r/2026-05-09-brain-dump-research)
-> — citation-rich, judges-friendly.
+> **Verified contest-fit.** The peer-reviewed research supporting this
+> use-case lives in two judges-friendly dossiers:
+> [brain-dump research](https://reports.thebarnetts.info/r/2026-05-09-brain-dump-research)
+> · [deep-research dossier](https://reports.thebarnetts.info/r/2026-05-09-bidet-deep-research).
 
 ---
+
+## Who Bidet AI is for
+
+There are four overlapping groups whose lives get noticeably easier when
+the keyboard stops being the bottleneck. The peer-reviewed evidence for
+voice-first capture and AI-assisted reformatting in these populations
+is robust:
+
+- **College students with attention-related learning differences** who
+  can hold a thought long enough to say it but lose it the moment they
+  stop to type.
+- **Students with phonological / decoding barriers to written input** —
+  readers for whom a wall of text is a wall.
+- **Students with graphomotor / orthographic barriers to written
+  output** — writers for whom typing or handwriting is the friction,
+  not the thinking.
+- **Associative thinkers who think in tangents** — people whose ideas
+  arrive in branching threads rather than linear sentences, and who
+  need a tool that can collect the branches and hand them back as a
+  trunk.
+
+The four-tab UX (RAW / CLEAN / ANALYSIS / FORAI) is shaped around
+tangent-driven thinking. The model does the reorganizing so the
+speaker doesn't have to. The research dossiers above lay out the
+specific peer-reviewed evidence base for each group.
 
 ## Why this exists
 
@@ -26,22 +54,14 @@ structured prompt — all generated locally on your phone. No cloud. No telemetr
 The video script will use this. Do not generate marketing prose on his behalf.
 -->
 
-## Who this is for
-
-College students who think out loud, who lose the thread between class and the
-desk, and who need a phone-shaped tool that meets them where their attention
-already lives. The four-tab UX (RAW / CLEAN / ANALYSIS / FORAI) is shaped
-around tangent-driven thinking — the model does the reorganizing so the
-speaker doesn't have to.
-
 ## Project description
 
 <!-- Mark fills this in: one to two sentences in his voice. -->
 
 Bidet AI for Android captures a single-speaker brain-dump on the phone's
-microphone, transcribes it on-device with a bundled Whisper-tiny model, and
-then restructures the transcript into four tabs using **Gemma 4 E4B running
-locally via LiteRT-LM**:
+microphone, transcribes it on-device with a bundled Whisper-tiny model,
+and then restructures the transcript into four tabs using **Gemma 4 E4B
+running locally via LiteRT-LM**:
 
 - **RAW** — the verbatim transcript, streamed live as you talk.
 - **CLEAN** — readable cleanup: filler removed, punctuation restored, paragraphs grouped.
@@ -113,6 +133,43 @@ The chunked-rolling pipeline also handles long-form single-speaker recordings
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Per-speaker adaptation roadmap (v0.3+)
+
+> **Status: experimental, in progress, results forthcoming.** Not a v0.2
+> contest claim. Prototyped on Mark's own voice; per-user pipeline is the
+> v0.3+ deliverable.
+
+The shipping v0.2 build uses Whisper-tiny as its base ASR engine — small,
+fast, and good enough for clear single-speaker capture on a Pixel 8 Pro.
+But Whisper was trained on web-scraped audio. The "average web speaker"
+isn't every speaker — and for users whose voice doesn't match Whisper's
+training distribution (heavy accents, English-language-learner cadence,
+deaf-speaker English, voices the open web underrepresents), word-error
+rates jump.
+
+The durable answer is per-speaker fine-tuning. The model that works for
+*you*, not for the average web-scraped speaker.
+
+The recipe being prototyped right now:
+
+- Roughly 30 minutes of clean labeled audio from the user
+- An hour of LoRA training on a consumer GPU (RTX 4070-class works)
+- Output: a small (~60 MB) personalized adapter that loads on top of
+  Whisper-large-v3 and meaningfully reduces WER for that user's voice
+
+The dogfood: Mark's own adapter. A 5-chunk LoRA chain trained on a
+22.5-hour corpus of his voice on an RTX 4070-class GPU produced a clean
+loss curve from 0.81 down to 0.12 over five training rounds — the
+textbook "you're done training" plateau. Held-out testing on real audio
+is the next step before the personal-adapter pipeline gets exposed to
+users; technical details and results will be linked from the
+research dossier as they land.
+
+For accessibility populations whose speech doesn't match Whisper's
+training distribution, this per-speaker pathway is the durable
+direction the project is heading. v0.2 ships a strong default;
+v0.3+ adds the option to make it yours.
+
 ## Privacy
 
 All LLM inference runs locally on Pixel hardware. Microphone audio never
@@ -159,3 +216,4 @@ at commit `ad7aad854ba34bf205922ddc12cca6cc7fb4f0ae` (2026-05-07). See
 upstream files are kept under the original Apache 2.0 license; modified files
 carry a `Modifications Copyright 2026 bidet-ai contributors. Changed: ...`
 line directly below the upstream copyright header (per Apache 2.0 §4(b)).
+
