@@ -121,6 +121,15 @@
             android:foregroundServiceType="microphone"
             android:exported="false" />
 
+        <!-- bidet-ai: foreground service for on-device Gemma generation on the Clean tabs.
+             Runs ~3-4 min for a 30-min brain dump at the 2048 token cap; needs to outlive
+             screen-sleep without Doze killing the model. Type=dataSync (closest match in
+             Android 14's typed FGS taxonomy for a local compute job). -->
+        <service
+            android:name="com.google.ai.edge.gallery.bidet.service.CleanGenerationService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
         <!-- bidet-ai: Firebase Analytics + AppMeasurement + Cloud Messaging entries stripped (zero-telemetry). -->
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <uses-native-library android:name="libOpenCL.so" android:required="false"/>

@@ -53,4 +53,21 @@ interface BidetGemmaClient {
         maxOutputTokens: Int = 16384,
         temperature: Float = 0.4f,
     ): String
+
+    /**
+     * Streaming variant of [runInference]. Each LiteRT-LM message chunk is delivered to
+     * [onChunk] as it arrives so the caller can re-render a partial result. The full final
+     * text is also returned for cache persistence.
+     *
+     * @param onChunk called once per streamed Message with (cumulativeText, chunkIndex). The
+     *   callback runs on whatever thread LiteRT-LM publishes from — implementations must be
+     *   safe to call from a background thread.
+     */
+    suspend fun runInferenceStreaming(
+        systemPrompt: String,
+        userPrompt: String,
+        maxOutputTokens: Int = 16384,
+        temperature: Float = 0.4f,
+        onChunk: (cumulativeText: String, chunkIndex: Int) -> Unit,
+    ): String
 }
