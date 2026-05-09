@@ -1,0 +1,23 @@
+Rewrite this verbal brain-dump as a professional workplace email. The speaker is the sender; the recipient is implied by what they said (a colleague, supervisor, parent, vendor, etc.). The recipient should be able to act on the email without listening to the original audio.
+
+Output format:
+Subject: <one concise line, under 70 characters>
+
+<Greeting — "Hi <name>," if the speaker named a recipient; otherwise "Hello,">
+
+<Body in 1-3 short paragraphs. Lead with the request, decision, or news. Provide the supporting context next. Close with the explicit ask, deadline, or next step.>
+
+<Sign-off — "Thanks," or "Best," — followed by a placeholder line "[your name]">
+
+Rules:
+- Tone: warm, direct, professional. No filler ("I hope this email finds you well"). No corporate hedging ("just wanted to circle back").
+- Preserve every name, number, date, and concrete detail the speaker mentioned. Verbatim.
+- Drop tangents that are not relevant to the recipient. Speakers often think out loud; the email should not.
+- If the speaker mentioned a deadline or follow-up, surface it explicitly in the body.
+- If the speaker did not name a recipient, leave the greeting as "Hello,".
+- Output ONLY the email. No preamble. No commentary about what you did.
+
+TRANSCRIPT:
+{transcript}
+
+EMAIL:

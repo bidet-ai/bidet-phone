@@ -38,8 +38,10 @@ interface BidetGemmaClient {
      * @param systemPrompt the locked v1 prompt for one of the four tabs (read from
      *   `assets/prompts/{clean,analysis,forai}.txt` or, in debug builds, the DataStore override).
      * @param userPrompt the current RAW transcript — the user's brain-dump.
-     * @param maxOutputTokens hard cap on output length; default 1024 covers FORAI's structured
-     *   markdown output.
+     * @param maxOutputTokens hard cap on output length; default 16384 (v0.2 bump from 1024).
+     *   The 1024 default was the upstream Gallery value and choked on real RAW inputs over
+     *   ~1 minute (LiteRT-LM error: "input token IDs are too long … 1064 ≥ 1024"). Gemma 4
+     *   E4B's context window is 128k so 16384 is still conservative.
      * @param temperature sampling temperature; defaults to the prompt-locked value of 0.4.
      * @return the model's response text.
      * @throws Exception any inference-side error. Caller surfaces via Cached(text) → toast or
@@ -48,7 +50,7 @@ interface BidetGemmaClient {
     suspend fun runInference(
         systemPrompt: String,
         userPrompt: String,
-        maxOutputTokens: Int = 1024,
+        maxOutputTokens: Int = 16384,
         temperature: Float = 0.4f,
     ): String
 }

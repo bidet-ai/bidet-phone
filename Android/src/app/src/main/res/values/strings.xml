@@ -24,13 +24,26 @@
   <string name="bidet_recording_notification_title" translatable="false">Bidet AI is recording</string>
   <string name="bidet_recording_notification_text" translatable="false">Tap the app to view the live transcript. The microphone is active.</string>
   <string name="bidet_recording_stop_action" translatable="false">Stop</string>
+  <!-- v0.2 three-tab restructure (2026-05-09): RAW / Clean for me (Receptive Support) /
+       Clean for others (Expressive Support). Old four-tab labels kept as deprecated
+       aliases below so the SessionDetail history viewer keeps rendering pre-v0.2 rows
+       without a strings-rename churn. -->
   <string name="bidet_tab_raw" translatable="false">RAW</string>
+  <string name="bidet_tab_clean_for_me" translatable="false">Clean for me</string>
+  <string name="bidet_tab_clean_for_others" translatable="false">Clean for others</string>
+  <!-- Deprecated v0.1 labels (still referenced from SessionDetailScreen for now). -->
   <string name="bidet_tab_clean" translatable="false">CLEAN</string>
   <string name="bidet_tab_analysis" translatable="false">ANALYSIS</string>
   <string name="bidet_tab_forai" translatable="false">FORAI</string>
   <string name="bidet_record_button" translatable="false">Record</string>
   <string name="bidet_stop_button" translatable="false">Stop</string>
   <string name="bidet_generate_button" translatable="false">Generate</string>
+  <string name="bidet_copy_button" translatable="false">Copy</string>
+  <string name="bidet_copied_toast" translatable="false">Copied</string>
+  <!-- v0.2 diff toggle: shown above the cached output on Clean-for-me / Clean-for-others.
+       Wording avoids "diff" jargon — Mark wants speaker-readable copy. -->
+  <string name="bidet_show_changes_label" translatable="false">Show me what changed</string>
+  <string name="bidet_show_changes_legend" translatable="false">Green = added by AI · struck through = your words the AI dropped</string>
   <string name="bidet_consent_title" translatable="false">About Gemma 4</string>
   <string name="bidet_consent_body" translatable="false">This app uses Google\'s Gemma 4 model running locally on your device. By continuing, you agree to the Gemma Terms of Use and Prohibited Use Policy.</string>
   <string name="bidet_consent_terms_link" translatable="false">https://ai.google.dev/gemma/terms</string>
@@ -47,22 +60,32 @@
   <string name="bidet_settings_send_to_tp3" translatable="false">Send to TP3</string>
   <string name="bidet_chunks_behind" translatable="false">Transcription behind by %1$d chunks</string>
   <string name="bidet_chunk_failure_marker" translatable="false">[chunk %1$d transcription failed]</string>
-  <!-- Tab 4 customizable-prompt feature (v0.2). Chip labels are user-visible copy and
-       deliberately avoid clinical terminology per banWordCheck rules — internal asset
-       filenames may differ. -->
-  <string name="bidet_tab4_chip_forai" translatable="false">FORAI (default)</string>
-  <string name="bidet_tab4_chip_dyslexic" translatable="false">Dyslexia-friendly</string>
-  <string name="bidet_tab4_chip_dysgraphic" translatable="false">Dysgraphia-friendly</string>
-  <string name="bidet_tab4_chip_tangent_organizer" translatable="false">Tangent organizer</string>
-  <string name="bidet_tab4_chip_plain_language" translatable="false">Plain language</string>
-  <string name="bidet_tab4_chip_custom" translatable="false">Custom…</string>
-  <string name="bidet_tab4_section_label" translatable="false">Output style</string>
-  <string name="bidet_tab4_sheet_title" translatable="false">Custom prompt</string>
-  <string name="bidet_tab4_sheet_hint" translatable="false">Tell Gemma exactly how to reshape your brain dump. The transcript will be supplied automatically — describe only the output you want.</string>
-  <string name="bidet_tab4_sheet_placeholder" translatable="false">e.g. Reformat for a 7th grade student with dyslexia. Use short sentences, bullet points, no idioms.</string>
-  <string name="bidet_tab4_sheet_save" translatable="false">Save and use</string>
-  <string name="bidet_tab4_sheet_cancel" translatable="false">Cancel</string>
-  <string name="bidet_tab4_idle_hint" translatable="false">Pick an output style above, then tap Generate to reshape your brain dump.</string>
+  <!-- v0.2 preset chips. Internal taxonomy: "Receptive Support" presets ride on Tab 2
+       ("Clean for me"); "Expressive Support" presets ride on Tab 3 ("Clean for others").
+       User-visible labels deliberately avoid clinical terminology per banWordCheck rules —
+       internal asset filenames may differ. -->
+  <string name="bidet_preset_section_label" translatable="false">Output style</string>
+  <!-- Receptive (Clean for me) presets. Order = display order; Default first, Custom last. -->
+  <string name="bidet_preset_summary" translatable="false">Summary</string>
+  <string name="bidet_preset_short_sentences" translatable="false">Short sentences</string>
+  <string name="bidet_preset_bullets_and_actions" translatable="false">Bullets and actions</string>
+  <string name="bidet_preset_tangent_organizer" translatable="false">Tangent organizer</string>
+  <string name="bidet_preset_plain_language" translatable="false">Plain language</string>
+  <!-- Expressive (Clean for others) presets. -->
+  <string name="bidet_preset_ai_ingest_markdown" translatable="false">AI-ingestion markdown</string>
+  <string name="bidet_preset_email_draft" translatable="false">Email draft</string>
+  <string name="bidet_preset_ai_agent_input" translatable="false">AI agent input</string>
+  <!-- Shared on both axes. -->
+  <string name="bidet_preset_custom" translatable="false">Custom…</string>
+  <!-- Custom-prompt BottomSheet copy. -->
+  <string name="bidet_preset_sheet_title" translatable="false">Custom prompt</string>
+  <string name="bidet_preset_sheet_hint" translatable="false">Tell Gemma exactly how to reshape your brain dump. The transcript will be supplied automatically — describe only the output you want.</string>
+  <string name="bidet_preset_sheet_placeholder" translatable="false">e.g. Rewrite as a one-page agenda for a 30-minute meeting with my supervisor.</string>
+  <string name="bidet_preset_sheet_save" translatable="false">Save and use</string>
+  <string name="bidet_preset_sheet_cancel" translatable="false">Cancel</string>
+  <!-- Tab idle hints. -->
+  <string name="bidet_clean_for_me_idle_hint" translatable="false">Pick an output style above, then tap Generate to reshape your brain dump for you to read.</string>
+  <string name="bidet_clean_for_others_idle_hint" translatable="false">Pick an output style above, then tap Generate to reshape your brain dump for someone else (or another AI) to read.</string>
   <!-- TODO(jingjin): Add translation support when i18n is ready. -->
   <string name="about_this_update" translatable="false">About this update</string>
   <string name="all" translatable="false">All</string>

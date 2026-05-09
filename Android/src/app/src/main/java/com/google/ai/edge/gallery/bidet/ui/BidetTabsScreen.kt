@@ -45,16 +45,19 @@ import com.google.ai.edge.gallery.R
 import kotlinx.coroutines.launch
 
 /**
- * Top-level four-tab Compose screen for the brain-dump UX. Brief §6.
- *
- * Layout: Scaffold(TopAppBar with record/stop button) -> Column(TabRow + HorizontalPager).
- * The TabRow and PagerState are bidirectionally synced — tap or swipe both work.
+ * v0.2 three-tab Compose screen. Brief: "Collapse 4 tabs into 3 (RAW / Clean for me /
+ * Clean for others)".
  *
  * Tab indices (locked):
- *   0 — RAW       (live, autoscroll while recording)
- *   1 — CLEAN     (on-demand)
- *   2 — ANALYSIS  (on-demand)
- *   3 — FORAI     (on-demand, the anchor)
+ *   0 — RAW                — live, autoscroll while recording. RawTabContent.
+ *   1 — Clean for me       — RECEPTIVE Support (output FOR the speaker).
+ *   2 — Clean for others   — EXPRESSIVE Support (output FROM the speaker).
+ *
+ * The v0.1 four-tab layout (RAW / CLEAN / ANALYSIS / FORAI) collapsed to three because
+ * CLEAN's "readable summary" use-case and ANALYSIS's "tangent-organized analysis" use-case
+ * are both shapes of the same Receptive Support axis — different presets of one tab is the
+ * right machinery, not separate tabs. Tab 4's customizable-prompt machinery now applies to
+ * BOTH Clean tabs via [SupportPreset]'s axis field.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,10 +102,6 @@ fun BidetTabsScreen(
         }
     ) { contentPadding ->
         Column(modifier = Modifier.padding(contentPadding).fillMaxSize()) {
-            // Bug B (2026-05-09): prominent always-visible "Recording 00:23 [STOP]" bar
-            // when a session is active. The TopAppBar's tiny stop-icon is too easy to miss
-            // (Mark: "there's like no buttons, no controls, no nothing"). This bar gives an
-            // unmissable affordance + a live elapsed-time readout.
             if (isRecording && recordingStartedAtMs > 0L) {
                 RecordingHeader(
                     startedAtMs = recordingStartedAtMs,
@@ -131,25 +130,34 @@ fun BidetTabsScreen(
                             val raw by viewModel.aggregator.rawFlow.collectAsStateWithLifecycle()
                             RawTabContent(rawText = raw, isRecording = isRecording)
                         }
-                        TAB_INDEX_CLEAN -> {
-                            val state by viewModel.cleanState.collectAsStateWithLifecycle()
-                            CleanTabContent(state = state, onGenerate = { viewModel.generateClean() })
-                        }
-                        TAB_INDEX_ANALYSIS -> {
-                            val state by viewModel.analysisState.collectAsStateWithLifecycle()
-                            AnalysisTabContent(state = state, onGenerate = { viewModel.generateAnalysis() })
-                        }
-                        TAB_INDEX_FORAI -> {
-                            val state by viewModel.foraiState.collectAsStateWithLifecycle()
-                            val activePreset by viewModel.tab4ActivePreset.collectAsStateWithLifecycle()
-                            val customPrompt by viewModel.tab4CustomPrompt.collectAsStateWithLifecycle()
-                            ForaiTabContent(
+                        TAB_INDEX_CLEAN_FOR_ME -> {
+                            val state by viewModel.receptiveState.collectAsStateWithLifecycle()
+                            val activePreset by viewModel.receptivePreset.collectAsStateWithLifecycle()
+                            val customPrompt by viewModel.receptiveCustomPrompt.collectAsStateWithLifecycle()
+                            CleanTabContent(
+                                axis = SupportAxis.RECEPTIVE,
                                 state = state,
                                 activePresetId = activePreset,
                                 customPrompt = customPrompt,
-                                onSelectPreset = { viewModel.setTab4Preset(it) },
-                                onSaveCustomPrompt = { viewModel.setTab4CustomPrompt(it) },
-                                onGenerate = { viewModel.generateForai() },
+                                rawTextProvider = { viewModel.currentRaw() },
+                                onSelectPreset = { viewModel.setPreset(SupportAxis.RECEPTIVE, it) },
+                                onSaveCustomPrompt = { viewModel.setCustomPrompt(SupportAxis.RECEPTIVE, it) },
+                                onGenerate = { viewModel.generateReceptive() },
+                            )
+                        }
+                        TAB_INDEX_CLEAN_FOR_OTHERS -> {
+                            val state by viewModel.expressiveState.collectAsStateWithLifecycle()
+                            val activePreset by viewModel.expressivePreset.collectAsStateWithLifecycle()
+                            val customPrompt by viewModel.expressiveCustomPrompt.collectAsStateWithLifecycle()
+                            CleanTabContent(
+                                axis = SupportAxis.EXPRESSIVE,
+                                state = state,
+                                activePresetId = activePreset,
+                                customPrompt = customPrompt,
+                                rawTextProvider = { viewModel.currentRaw() },
+                                onSelectPreset = { viewModel.setPreset(SupportAxis.EXPRESSIVE, it) },
+                                onSaveCustomPrompt = { viewModel.setCustomPrompt(SupportAxis.EXPRESSIVE, it) },
+                                onGenerate = { viewModel.generateExpressive() },
                             )
                         }
                     }
@@ -159,20 +167,18 @@ fun BidetTabsScreen(
     }
 
     // When a new recording starts, reset all non-RAW tab states so user is not staring at
-    // a stale CLEAN/ANALYSIS/FORAI from the previous session.
+    // a stale Clean for me / Clean for others from the previous session.
     LaunchedEffect(isRecording) {
         if (isRecording) viewModel.resetTabs()
     }
 }
 
 const val TAB_INDEX_RAW: Int = 0
-const val TAB_INDEX_CLEAN: Int = 1
-const val TAB_INDEX_ANALYSIS: Int = 2
-const val TAB_INDEX_FORAI: Int = 3
+const val TAB_INDEX_CLEAN_FOR_ME: Int = 1
+const val TAB_INDEX_CLEAN_FOR_OTHERS: Int = 2
 
 private val TAB_TITLES: List<Int> = listOf(
     R.string.bidet_tab_raw,
-    R.string.bidet_tab_clean,
-    R.string.bidet_tab_analysis,
-    R.string.bidet_tab_forai,
+    R.string.bidet_tab_clean_for_me,
+    R.string.bidet_tab_clean_for_others,
 )

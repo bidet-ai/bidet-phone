@@ -250,7 +250,16 @@ class GemmaAudioEngine @Inject constructor(
 
     companion object {
         private const val TAG = "BidetGemmaAudioEngine"
-        private const val MAX_OUTPUT_TOKENS = 1024
+        // v0.2 (2026-05-09): bumped 1024 → 16384 to match the chat path. Two consequences:
+        //  (a) the audio engine itself never produces close to 1024 tokens of output (a 30 s
+        //      verbatim transcription is at most a few hundred), but the shared LiteRT-LM
+        //      Engine is constructed with the larger of the audio + chat acquirers'
+        //      maxNumTokens. Bumping here lets the audio engine acquire the engine first
+        //      without forcing a rebuild on the chat client's larger request.
+        //  (b) Mark hit the upstream-Gallery 1024 cap on the chat side during live testing
+        //      (LiteRT error: "1064 ≥ 1024"). 16384 gives plenty of headroom on both paths
+        //      and is still well below Gemma 4 E4B's 128k context window.
+        private const val MAX_OUTPUT_TOKENS = 16384
         private const val SYSTEM_PROMPT =
             "You are a verbatim transcription engine. Output only the spoken words exactly as said. " +
                 "No timestamps, no speaker labels, no commentary, no punctuation cleanup beyond the natural sentence boundaries. " +
