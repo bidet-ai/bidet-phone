@@ -16,6 +16,8 @@
 
 package com.google.ai.edge.gallery.bidet.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -238,11 +240,10 @@ private fun CleanTabBody(
  * layer but kept for call-site clarity (the caller can see what it's wiring up).
  */
 @Suppress("UNUSED_PARAMETER")
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 private fun Modifier.combinedClickableForCopy(text: String, onCopy: () -> Unit): Modifier =
-    this.then(
-        androidx.compose.foundation.combinedClickable(
-            onClick = { /* tap is no-op; long-press copies. RAW tab has an explicit Copy button. */ },
-            onLongClick = onCopy,
-        )
+    this.combinedClickable(
+        onClick = { /* tap is no-op; long-press copies. RAW tab has an explicit Copy button. */ },
+        onLongClick = onCopy,
     )
+
