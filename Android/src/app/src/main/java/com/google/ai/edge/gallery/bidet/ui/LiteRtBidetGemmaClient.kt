@@ -19,13 +19,11 @@ package com.google.ai.edge.gallery.bidet.ui
 import android.content.Context
 import android.util.Log
 import com.google.ai.edge.gallery.bidet.download.BidetModelProvider
-import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.gallery.bidet.llm.BidetSharedLiteRtEngineProvider
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
@@ -43,15 +41,19 @@ import kotlinx.coroutines.sync.withLock
  * Concrete [BidetGemmaClient] backed directly by LiteRT-LM. Phase 3 wiring per brief §6 + §8.
  *
  * Lifecycle:
- *  - [BidetModelProvider] owns the on-disk model file (download + verify lifecycle). This
- *    client lazily constructs the LiteRT-LM [Engine] on the first [runInference] call once
- *    [BidetModelProvider.isModelReady] returns true. The Engine is reused across tabs.
+ *  - [BidetModelProvider] owns the on-disk model file (download + verify lifecycle).
+ *  - [BidetSharedLiteRtEngineProvider] owns the live LiteRT-LM
+ *    [com.google.ai.edge.litertlm.Engine].
+ *
+ *    F3.2 fix (2026-05-09): the engine is shared with
+ *    [com.google.ai.edge.gallery.bidet.transcription.GemmaAudioEngine] so the gemma flavor
+ *    holds exactly ONE engine in memory rather than two engines pointing at the same
+ *    3.6 GB model file. See the provider's class-level kdoc for the rationale.
  *  - Each [runInference] call resets the [Conversation] so the four tabs do not contaminate
  *    each other's KV cache. The system prompt is wired via
- *    [ConversationConfig.systemInstruction] on [Engine.createConversation] (closer to
- *    LiteRT-LM grain than concatenating into the user content per the brief recommendation).
- *  - On any exception during [Engine] init, the engine reference is cleared so the next call
- *    re-attempts initialization rather than wedging into a half-built state.
+ *    [ConversationConfig.systemInstruction] on
+ *    [com.google.ai.edge.litertlm.Engine.createConversation] (closer to LiteRT-LM grain
+ *    than concatenating into the user content per the brief).
  *
  * If [BidetModelProvider.isModelReady] returns false, [runInference] throws
  * [BidetModelNotReadyException]. The four tab composables surface this error and route the
@@ -61,12 +63,17 @@ import kotlinx.coroutines.sync.withLock
 class LiteRtBidetGemmaClient @Inject constructor(
     @Suppress("UNUSED_PARAMETER") @ApplicationContext private val context: Context,
     private val modelProvider: BidetModelProvider,
+    private val sharedEngineProvider: BidetSharedLiteRtEngineProvider,
 ) : BidetGemmaClient {
 
-    /** Engine + active conversation. Lazily constructed on first runInference call. */
-    private data class EngineHandle(val engine: Engine, var conversation: Conversation)
-
-    @Volatile private var handle: EngineHandle? = null
+    /**
+     * F3.2 (2026-05-09): the [com.google.ai.edge.litertlm.Engine] is owned by
+     * [BidetSharedLiteRtEngineProvider] now — we only track the active [Conversation]
+     * locally. Closing the conversation when a new tab generation starts is still our job;
+     * closing the engine is NOT (the audio engine shares it; the provider holds it for the
+     * process lifetime).
+     */
+    @Volatile private var conversation: Conversation? = null
     private val initMutex = Mutex()
 
     @OptIn(ExperimentalApi::class)
@@ -85,13 +92,23 @@ class LiteRtBidetGemmaClient @Inject constructor(
 
         // Build / rebuild the conversation under a mutex so concurrent tab generations don't
         // race the LiteRT-LM Conversation lifecycle.
-        val conversation = initMutex.withLock {
-            val engine = ensureEngine(maxOutputTokens)
-            // Each tab call is one-shot: close the previous conversation (if any) and create a
-            // fresh one with the per-call systemInstruction + sampler config. The brief calls
-            // out passing system as `systemInstruction` instead of pre-concatenating into the
-            // user prompt; this implements that.
-            val existing = handle?.conversation
+        val activeConversation = initMutex.withLock {
+            val engine = try {
+                sharedEngineProvider.acquire(
+                    requireAudio = false,
+                    maxNumTokens = maxOutputTokens,
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "shared engine acquire failed", t)
+                throw BidetModelNotReadyException(
+                    "Failed to initialize Gemma 4 LiteRT-LM engine: ${t.message}"
+                )
+            }
+            // Each tab call is one-shot: close the previous conversation (if any) and
+            // create a fresh one with the per-call systemInstruction + sampler config. The
+            // brief calls out passing system as `systemInstruction` instead of pre-
+            // concatenating into the user prompt; this implements that.
+            val existing = conversation
             if (existing != null) {
                 try { existing.close() } catch (t: Throwable) {
                     Log.w(TAG, "previous conversation.close threw, continuing", t)
@@ -108,7 +125,7 @@ class LiteRtBidetGemmaClient @Inject constructor(
                     tools = emptyList(),
                 )
             )
-            handle = handle?.copy(conversation = conv)
+            conversation = conv
             conv
         }
 
@@ -128,7 +145,7 @@ class LiteRtBidetGemmaClient @Inject constructor(
                 }
             }
             try {
-                conversation.sendMessageAsync(
+                activeConversation.sendMessageAsync(
                     Contents.of(listOf(Content.Text(userPrompt))),
                     callback,
                     emptyMap(),
@@ -139,59 +156,12 @@ class LiteRtBidetGemmaClient @Inject constructor(
 
             cont.invokeOnCancellation {
                 try {
-                    conversation.cancelProcess()
+                    activeConversation.cancelProcess()
                 } catch (e: Throwable) {
                     Log.w(TAG, "cancelProcess threw on coroutine cancellation", e)
                 }
             }
         }
-    }
-
-    /** Construct the LiteRT-LM Engine on first call. Idempotent under [initMutex]. */
-    @OptIn(ExperimentalApi::class)
-    private fun ensureEngine(maxOutputTokens: Int): Engine {
-        handle?.let { return it.engine }
-        val modelFile = modelProvider.getModelPath()
-            ?: throw BidetModelNotReadyException("Model path is unavailable.")
-        if (!modelFile.exists() || modelFile.length() == 0L) {
-            throw BidetModelNotReadyException(
-                "Model file does not exist at ${modelFile.absolutePath}"
-            )
-        }
-        val cacheDir = context.getExternalFilesDir(null)?.absolutePath
-        val config = EngineConfig(
-            modelPath = modelFile.absolutePath,
-            backend = Backend.GPU(),
-            visionBackend = null,
-            audioBackend = null,
-            maxNumTokens = maxOutputTokens,
-            cacheDir = cacheDir,
-        )
-        val engine = try {
-            Engine(config).also { it.initialize() }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Engine.initialize failed", t)
-            throw BidetModelNotReadyException(
-                "Failed to initialize Gemma 4 LiteRT-LM engine: ${t.message}"
-            )
-        }
-        // Conversation is constructed per-call so we only need a placeholder slot here. We
-        // will overwrite it on the next createConversation. Building a no-op Conversation up
-        // front is awkward (createConversation is synchronous and there is no "empty" ctor),
-        // so instead we leave the conversation slot lazily owned: handle is built once
-        // ensureEngine returns and runInference creates the per-call conversation.
-        handle = EngineHandle(engine = engine, conversation = engine.createConversation(
-            ConversationConfig(
-                samplerConfig = SamplerConfig(
-                    topK = DEFAULT_TOPK,
-                    topP = DEFAULT_TOPP.toDouble(),
-                    temperature = DEFAULT_TEMPERATURE.toDouble(),
-                ),
-                systemInstruction = null,
-                tools = emptyList(),
-            )
-        ))
-        return engine
     }
 
     companion object {
@@ -201,7 +171,6 @@ class LiteRtBidetGemmaClient @Inject constructor(
         // upstream Gallery's defaults (DEFAULT_TOPK=40, DEFAULT_TOPP=0.95).
         private const val DEFAULT_TOPK: Int = 40
         private const val DEFAULT_TOPP: Float = 0.95f
-        private const val DEFAULT_TEMPERATURE: Float = 0.4f
     }
 }
 

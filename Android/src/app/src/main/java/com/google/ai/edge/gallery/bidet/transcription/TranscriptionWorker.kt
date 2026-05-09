@@ -95,10 +95,59 @@ class TranscriptionWorker(
         return true
     }
 
-    /** Cancel the consumer coroutine. */
+    /**
+     * Cancel the consumer coroutine without waiting.
+     *
+     * F1.1 (2026-05-09): callers that need to tear down native engine resources after
+     * cancellation must use [stopAndJoin] instead — this `stop()` only schedules
+     * cancellation. Closing the engine before an in-flight transcribe finishes was the
+     * use-after-free that motivated the F1.1 fix. `stop()` is preserved for paths that
+     * don't subsequently touch native resources.
+     */
     fun stop() {
         job?.cancel()
         job = null
+    }
+
+    /**
+     * F1.1 fix (2026-05-09): cancel the consumer AND await completion.
+     *
+     * The bug we're fixing:
+     *  - [com.google.ai.edge.gallery.bidet.service.RecordingService.stopRecording] used to
+     *    do `worker.stop()` + `transcriptionEngine.close()` back-to-back. `worker.stop()`
+     *    only *cancels* the consumer's [Job]; it does not *join* it. Meanwhile
+     *    [handleAudio] wraps its [TranscriptionEngine.transcribe] call in
+     *    `withContext(NonCancellable + Dispatchers.Default)`, so a transcribe that started
+     *    before Stop keeps running. The next line — `transcriptionEngine.close()` — yanks
+     *    the native pointer out from under the still-running whisper.cpp / LiteRT-LM
+     *    call, classic use-after-free. On a real device the failure mode is "user taps
+     *    Stop mid-transcribe → app dies + ANR". Bad demo crash.
+     *
+     * Fix: this method cancels the consumer's outer collect (so we don't pick up new
+     * chunks) AND awaits the in-flight handleAudio() to finish via [Job.join]. Once join
+     * returns, the caller can safely close the engine knowing nothing is touching it.
+     *
+     * Note on NonCancellable: handleAudio's `withContext(NonCancellable + Dispatchers.Default)`
+     * is what makes the join *useful* — without NonCancellable the cancel would propagate
+     * into the transcribe call and surface as a CancellationException; with NonCancellable
+     * the transcribe runs to completion, the result is appended to the aggregator, and
+     * only then does the join return. Net effect: a Stop tap during transcribe yields the
+     * chunk's text in the saved session rather than "[chunk N transcription failed]" + a
+     * crash.
+     */
+    suspend fun stopAndJoin() {
+        val j = job ?: return
+        j.cancel()
+        try {
+            j.join()
+        } catch (_: Throwable) {
+            // join() doesn't throw on a normally-completed or cancelled job, but a parent
+            // scope cancellation can race here. Either way the consumer is no longer
+            // collecting; the caller's contract — "after this returns, nothing is in
+            // transcribe()" — holds.
+        } finally {
+            job = null
+        }
     }
 
     private suspend fun handleAudio(chunk: Chunk.Audio) {

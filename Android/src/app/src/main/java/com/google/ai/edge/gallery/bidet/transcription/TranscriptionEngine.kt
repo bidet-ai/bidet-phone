@@ -12,6 +12,11 @@ package com.google.ai.edge.gallery.bidet.transcription
 
 import android.content.Context
 import com.google.ai.edge.gallery.BuildConfig
+import com.google.ai.edge.gallery.bidet.llm.BidetSharedLiteRtEngineProvider
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 
 /**
  * Common surface for any speech-to-text engine. Two implementations exist:
@@ -39,13 +44,22 @@ interface TranscriptionEngine {
     /**
      * Transcribe one chunk of audio.
      *
+     * F3.4 (2026-05-09): now `suspend` so the LiteRT-LM-backed [GemmaAudioEngine] can use
+     * [kotlinx.coroutines.suspendCancellableCoroutine] + `cont.invokeOnCancellation` to
+     * release the underlying Gemma run when the parent coroutine is cancelled. The
+     * previous sync contract forced [GemmaAudioEngine] to block on a
+     * [java.util.concurrent.CountDownLatch], which pinned a Default-dispatcher thread for
+     * up to 60 s and never propagated coroutine cancellation down to LiteRT-LM.
+     * [WhisperEngine] satisfies the suspend contract via
+     * [com.whispercpp.whisper.WhisperContext.transcribeData] (already suspend upstream).
+     *
      * @param floatPcm Float32 mono samples in the range [-1.0, 1.0].
      * @param sampleRateHz Audio sample rate in Hz. Both engines require 16 kHz.
      * @return The transcribed text, trimmed. May be empty for silence/non-speech.
      * @throws IllegalStateException if [initialize] has not succeeded.
      * @throws IllegalArgumentException if [sampleRateHz] is not 16 000.
      */
-    fun transcribe(floatPcm: FloatArray, sampleRateHz: Int = 16_000): String
+    suspend fun transcribe(floatPcm: FloatArray, sampleRateHz: Int = 16_000): String
 
     /** Convert int16 little-endian PCM bytes to a normalized Float32 array (helper). */
     fun int16ToFloat32(pcmBytes: ByteArray): FloatArray {
@@ -69,12 +83,35 @@ interface TranscriptionEngine {
         /**
          * Construct the engine for the current product flavor. Reads
          * [BuildConfig.USE_GEMMA_AUDIO] to pick.
+         *
+         * F3.2 (2026-05-09): the gemma flavor reaches into Hilt for the shared
+         * [BidetSharedLiteRtEngineProvider] via an EntryPoint rather than `@Inject`-ing
+         * directly into [GemmaAudioEngine] from this static factory. Tests for
+         * [com.google.ai.edge.gallery.bidet.service.RecordingService] swap in their own
+         * `engineFactory` (see the property of that name on `RecordingService`); they're
+         * free to construct a fake engine without touching Hilt at all.
          */
         fun create(context: Context): TranscriptionEngine =
             if (BuildConfig.USE_GEMMA_AUDIO) {
-                GemmaAudioEngine(context)
+                val provider = EntryPointAccessors.fromApplication(
+                    context.applicationContext,
+                    SharedEngineEntryPoint::class.java,
+                ).sharedEngineProvider()
+                GemmaAudioEngine(context.applicationContext, provider)
             } else {
                 WhisperEngine(context)
             }
+    }
+
+    /**
+     * F3.2 (2026-05-09): Hilt EntryPoint reaching the shared LiteRT-LM engine provider
+     * from the non-Hilt [create] factory. The Hilt graph itself sees the provider as a
+     * `@Singleton` `@Inject`-able; this entry-point is just the bridge for the static
+     * factory.
+     */
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface SharedEngineEntryPoint {
+        fun sharedEngineProvider(): BidetSharedLiteRtEngineProvider
     }
 }
