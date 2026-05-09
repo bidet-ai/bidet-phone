@@ -4,15 +4,35 @@
   <img src="branding/bidet-ai_icon.png" alt="Bidet AI logo" width="180" />
 </p>
 
-Offline voice brain-dump cleaner for Android. Talk a thought out loud; get back
-a clean transcript, an organized analysis, and an AI-ready structured prompt —
-all generated locally on your phone. No cloud. No telemetry.
+Offline voice brain-dump cleaner for Android, built for college students with
+attention-related learning differences who want to capture lectures and turn
+spoken thinking into something they can actually study from. Talk a thought
+out loud; get back a clean transcript, an organized analysis, and an AI-ready
+structured prompt — all generated locally on your phone. No cloud. No telemetry.
 
 > **Status:** v0.1, contest build for the Google Gemma 2026 Challenge
 > (submission deadline 2026-05-24). Primary target device: Pixel 8 Pro
 > (Android 15+). First-run Gemma 4 model download is ~3.7 GB.
+>
+> **Verified contest-fit:** the research dossier supporting this use-case lives at
+> [reports.thebarnetts.info/r/2026-05-09-brain-dump-research](https://reports.thebarnetts.info/r/2026-05-09-brain-dump-research)
+> — citation-rich, judges-friendly.
 
 ---
+
+## Why this exists
+
+<!-- Mark fills this in: 1-2 paragraphs about why brain dumps matter to you.
+The video script will use this. Do not generate marketing prose on his behalf.
+-->
+
+## Who this is for
+
+College students who think out loud, who lose the thread between class and the
+desk, and who need a phone-shaped tool that meets them where their attention
+already lives. The four-tab UX (RAW / CLEAN / ANALYSIS / FORAI) is shaped
+around tangent-driven thinking — the model does the reorganizing so the
+speaker doesn't have to.
 
 ## Project description
 

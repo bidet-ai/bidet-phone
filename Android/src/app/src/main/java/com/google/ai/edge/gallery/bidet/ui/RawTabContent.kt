@@ -16,10 +16,11 @@
 
 package com.google.ai.edge.gallery.bidet.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,28 +33,33 @@ import androidx.compose.ui.unit.dp
  * Behaviour:
  *  - Streaming text from [com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator.rawFlow]
  *    is collected in [BidetTabsScreen] and passed in here as a String.
- *  - While recording, the list autoscrolls to the bottom on every transcript update so the
+ *  - While recording, the view autoscrolls to the bottom on every transcript update so the
  *    user sees the latest words appear.
  *  - When stopped, the user can scroll freely.
+ *
+ * Demo polish (2026-05-09): swapped `LazyColumn { item { ... } }` for a plain
+ * `Column(verticalScroll(...))`. There was only ever one child and zero virtualization
+ * benefit — the lazy-list machinery was a category error here.
  */
 @Composable
 fun RawTabContent(rawText: String, isRecording: Boolean) {
-    val listState = rememberLazyListState()
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+    val scrollState = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(16.dp),
     ) {
-        item {
-            Text(
-                text = rawText.ifEmpty {
-                    if (isRecording) "Listening..." else "Tap the microphone to begin recording."
-                },
-            )
-        }
+        Text(
+            text = rawText.ifEmpty {
+                if (isRecording) "Listening..." else "Tap the microphone to begin recording."
+            },
+        )
     }
     LaunchedEffect(rawText, isRecording) {
         if (isRecording && rawText.isNotEmpty()) {
-            listState.animateScrollToItem(0) // single-item list — keep at top so latest text is visible
+            // Keep the latest words visible as the transcript streams in.
+            scrollState.animateScrollTo(scrollState.maxValue)
         }
     }
 }

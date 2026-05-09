@@ -60,8 +60,16 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * Empty-state placeholder used while the bound [RecordingService] hasn't connected yet.
+ * Hoisted to a top-level `val` so the inline `remember { MutableStateFlow(...) }` fallback
+ * stays a one-liner instead of a fully-qualified multi-line expression.
+ */
+private val IDLE_STATUS = RecordingService.Status(false, null, 0L, null)
 
 /**
  * Top-level Bidet screen. Owns:
@@ -205,10 +213,8 @@ private fun ReadyScreen(
     // via ServiceConnection.onServiceConnected. The old snapshot pattern was racy — when
     // the user tapped Record AFTER the bind callback had already fired, the resulting
     // pipeline never propagated back to the Composable, so the recording UI never appeared.
-    val statusFlow = serviceRef?.statusFlow
-    val status by (statusFlow ?: remember { kotlinx.coroutines.flow.MutableStateFlow(
-        RecordingService.Status(false, null, 0L, null)
-    ) }).collectAsState()
+    val status by (serviceRef?.statusFlow ?: remember { MutableStateFlow(IDLE_STATUS) })
+        .collectAsState()
 
     val isRecording = status.isRecording
     val pipeline = status.pipeline
