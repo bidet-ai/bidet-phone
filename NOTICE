@@ -5,5 +5,13 @@ This product includes software developed by Google LLC
 (https://github.com/google-ai-edge/gallery), licensed under the
 Apache License, Version 2.0.
 
+This product includes whisper.cpp by Georgi Gerganov
+(https://github.com/ggerganov/whisper.cpp), licensed under the
+MIT License. The whisper.cpp source is included as a git submodule
+under Android/src/app/src/main/cpp/whisper.cpp pinned to v1.8.4.
+Kotlin/JNI bindings under Android/src/app/src/main/java/com/whispercpp/
+and Android/src/app/src/main/cpp/whisper_jni.c are vendored from
+whisper.cpp's examples/whisper.android sample.
+
 Gemma is provided under and subject to the Gemma Terms of Use
 found at ai.google.dev/gemma/terms.

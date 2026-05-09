@@ -59,6 +59,28 @@ android {
     manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // bidet-ai 2026-05-08: whisper.cpp NDK build replaces the dead whisper-jni 1.7.1 desktop
+    // JAR (which shipped no Android binaries — the cause of Bug C, Issue #10). The native lib
+    // is built from the whisper.cpp git submodule at src/main/cpp/whisper.cpp via the
+    // CMakeLists.txt at src/main/cpp/. Pinned to whisper.cpp v1.8.4.
+    //
+    // Pixel 8 Pro is the only supported target for v0.1, so we restrict to arm64-v8a to
+    // keep build time + APK size minimal. Add other ABIs in a follow-up if Mark wants the
+    // app to run on other devices later.
+    ndk {
+      abiFilters += "arm64-v8a"
+    }
+  }
+
+  // bidet-ai 2026-05-08: NDK pinned to a recent stable that supports arm64-v8a fp16
+  // (ARMv8.2-A) intrinsics required for whisper_v8fp16_va variant. AGP auto-installs.
+  ndkVersion = "27.0.12077973"
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
   }
 
   // bidet-ai: release signingConfig populated from CI env vars (GitHub Secrets workflow
@@ -155,9 +177,11 @@ dependencies {
   implementation(libs.androidx.documentfile)
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
-  // bidet-ai: Whisper.cpp Android JNI bindings for ASR.
-  // Choice rationale: see UPSTREAM_WHISPER.md (whisper-jni 1.7.1, official ggml-tiny.en model).
-  implementation(libs.whisper.jni)
+  // bidet-ai 2026-05-08: whisper-jni dep REMOVED. It was a desktop-only JVM JAR with zero
+  // Android binaries — Bug C / Issue #10. Replaced with a whisper.cpp NDK build via
+  // git submodule + CMakeLists.txt + externalNativeBuild (see android { ... } block above).
+  // Inference call path: WhisperEngine.kt → com.whispercpp.whisper.WhisperContext (vendored
+  // Kotlin bindings) → libwhisper.so / libwhisper_v8fp16_va.so (built from src/main/cpp/).
   // bidet-ai: OkHttp for the optional debug Tp3Sender webhook POST. Phase 4A also uses
   // OkHttp for the dynamic Content-Length HEAD fetch in BidetModelProvider.
   implementation(libs.okhttp)

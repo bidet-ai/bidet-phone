@@ -23,6 +23,7 @@ import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
@@ -84,13 +85,22 @@ class TranscriptionWorker(
     }
 
     private suspend fun handleAudio(chunk: Chunk.Audio) {
-        // Heavy lifting (Whisper) is CPU-bound — push onto Dispatchers.Default so we don't
-        // block whatever scope owns the worker.
-        val text = withContext(Dispatchers.Default) {
+        // 2026-05-09: wrap in NonCancellable so that when the user taps Stop, an
+        // already-in-flight whisper_full call (which can take a few seconds even
+        // optimized) gets to finish and write its result to the aggregator/DB.
+        // Before this, stop → scope.cancel() → JobCancellationException mid-transcribe
+        // → empty rawText. With NonCancellable the transcribe and the aggregator
+        // append both complete; only the *next* chunk would be skipped.
+        //
+        // Heavy lifting (Whisper) is CPU-bound — push onto Dispatchers.Default so we
+        // don't compete with the audio capture loop for a single thread.
+        val text = withContext(NonCancellable + Dispatchers.Default) {
             val floatPcm = whisperEngine.int16ToFloat32(chunk.bytes)
             whisperEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
         }
-        aggregator.append(idx = chunk.idx, startMs = chunk.startMs, text = text)
+        withContext(NonCancellable) {
+            aggregator.append(idx = chunk.idx, startMs = chunk.startMs, text = text)
+        }
     }
 
     companion object {

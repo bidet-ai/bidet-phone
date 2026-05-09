@@ -36,6 +36,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 2026-05-08: whisper.cpp lives under Android/src/app/src/main/cpp/whisper.cpp as
+          # a git submodule, pinned to v1.8.4. Without recursive checkout the NDK build fails
+          # with "no source files" because the submodule directory is empty.
+          submodules: recursive
 
       - name: Set up JDK 21 (Temurin)
         uses: actions/setup-java@v4
