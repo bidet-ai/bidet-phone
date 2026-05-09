@@ -4,14 +4,13 @@
   <img src="branding/bidet-ai_icon.png" alt="Bidet AI logo" width="180" />
 </p>
 
-**Bidet AI is for people whose brains move faster than their fingers.**
+**Brain dumps are messy. Bidet AI cleans them up.**
 
-It's an offline voice brain-dump cleaner for Android, designed for the
-students who lose ideas to the mechanical friction of typing — readers
-and writers whose thinking outruns the keyboard. Talk a thought out
-loud; get back a clean transcript, an organized analysis, and an
-AI-ready structured prompt — all generated locally on your phone.
-No cloud. No telemetry.
+Built for people whose brains move faster than their fingers — students
+who lose ideas to the mechanical friction of typing, readers and writers
+whose thinking outruns the keyboard. Talk a thought out loud; get back
+a clean transcript, an organized analysis, and an AI-ready structured
+prompt — all generated locally on your phone. No cloud. No telemetry.
 
 > **Status:** v0.2, contest build for the Google Gemma 2026 Challenge
 > (submission deadline 2026-05-24). Primary target device: Pixel 8 Pro
