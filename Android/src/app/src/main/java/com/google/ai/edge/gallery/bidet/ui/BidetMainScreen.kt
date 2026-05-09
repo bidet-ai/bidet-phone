@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -199,23 +200,34 @@ private fun ReadyScreen(
     val viewModel: BidetTabsViewModel = hiltViewModel()
 
     var serviceRef by remember { mutableStateOf<RecordingService?>(null) }
-    var aggregator by remember { mutableStateOf<TranscriptAggregator?>(null) }
-    var isRecording by remember { mutableStateOf(false) }
+
+    // Bug B (2026-05-09): observe the service's StateFlow instead of snapshotting it once
+    // via ServiceConnection.onServiceConnected. The old snapshot pattern was racy — when
+    // the user tapped Record AFTER the bind callback had already fired, the resulting
+    // pipeline never propagated back to the Composable, so the recording UI never appeared.
+    val statusFlow = serviceRef?.statusFlow
+    val status by (statusFlow ?: remember { kotlinx.coroutines.flow.MutableStateFlow(
+        RecordingService.Status(false, null, 0L, null)
+    ) }).collectAsState()
+
+    val isRecording = status.isRecording
+    val pipeline = status.pipeline
+    val aggregator = pipeline?.aggregator
+
+    // Hand the aggregator to the ViewModel as soon as one becomes available. This used to
+    // be inline with each onToggleRecording branch, which only worked when the pipeline was
+    // ready synchronously (it isn't — the foreground service hasn't constructed it yet).
+    LaunchedEffect(aggregator) {
+        aggregator?.let { viewModel.attachAggregator(it) }
+    }
 
     DisposableEffect(context) {
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                val svc = (binder as? RecordingService.LocalBinder)?.service()
-                serviceRef = svc
-                aggregator = svc?.pipeline()?.aggregator
-                isRecording = svc?.pipeline() != null
-                svc?.pipeline()?.aggregator?.let { viewModel.attachAggregator(it) }
+                serviceRef = (binder as? RecordingService.LocalBinder)?.service()
             }
-
             override fun onServiceDisconnected(name: ComponentName?) {
                 serviceRef = null
-                aggregator = null
-                isRecording = false
             }
         }
         val intent = Intent(context, RecordingService::class.java)
@@ -227,58 +239,89 @@ private fun ReadyScreen(
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
                 ContextCompat.startForegroundService(context, RecordingService.startIntent(context))
-                isRecording = true
-                serviceRef?.pipeline()?.aggregator?.let { viewModel.attachAggregator(it) }
+                // The status flow will emit when the service flips state — no need to
+                // mirror it locally any more.
             }
         }
 
     val onToggleRecording: () -> Unit = {
         if (isRecording) {
             ContextCompat.startForegroundService(context, RecordingService.stopIntent(context))
-            isRecording = false
         } else {
             val granted = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
             if (granted) {
                 ContextCompat.startForegroundService(context, RecordingService.startIntent(context))
-                isRecording = true
-                serviceRef?.pipeline()?.aggregator?.let { viewModel.attachAggregator(it) }
             } else {
                 recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
     }
 
-    // If a tab generation surfaces BidetModelNotReadyException (e.g. the user manually deleted
-    // the model file out from under us), kick the user back to the download screen. The
-    // BidetTabsViewModel exposes a one-shot signal we can observe.
     LaunchedEffect(Unit) {
         viewModel.modelMissingSignal.collect {
             onRequestDownload()
         }
     }
 
-    val agg = aggregator
-    if (agg != null && viewModel.hasAggregator) {
-        BidetTabsScreen(
-            viewModel = viewModel,
-            isRecording = isRecording,
-            onToggleRecording = onToggleRecording,
-            onOpenHistory = onOpenHistory,
-        )
-    } else {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(24.dp),
-            ) {
-                Text("Bidet AI")
-                Text("Tap Record to begin a brain-dump.")
-                Button(onClick = onToggleRecording) { Text("Record") }
-                Button(onClick = onOpenHistory) { Text("History") }
+    // UI gating:
+    //   * Recording AND aggregator ready  → full BidetTabsScreen with the live RAW tab +
+    //                                        the recording header (timer + STOP).
+    //   * Recording AND no aggregator yet → "Starting recording…" transitional screen with
+    //                                        timer + STOP. Whisper init usually takes ~1 sec
+    //                                        on the Pixel; this is a brief flash. Without it
+    //                                        the user would see the welcome screen with mic
+    //                                        already hot — that's the original Bug B.
+    //   * Not recording                   → welcome with Record + History.
+    when {
+        isRecording && aggregator != null && viewModel.hasAggregator -> {
+            BidetTabsScreen(
+                viewModel = viewModel,
+                isRecording = true,
+                recordingStartedAtMs = status.startedAtMs,
+                onToggleRecording = onToggleRecording,
+                onOpenHistory = onOpenHistory,
+            )
+        }
+        isRecording -> {
+            RecordingStartingScreen(
+                startedAtMs = status.startedAtMs,
+                onStop = onToggleRecording,
+            )
+        }
+        else -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(24.dp),
+                ) {
+                    Text("Bidet AI")
+                    Text("Tap Record to begin a brain-dump.")
+                    Button(onClick = onToggleRecording) { Text("Record") }
+                    Button(onClick = onOpenHistory) { Text("History") }
+                }
             }
+        }
+    }
+}
+
+/**
+ * Bug B fix companion: tiny screen shown for the brief window between the user tapping
+ * Record and the foreground service's pipeline coming online. Without this we'd render the
+ * welcome screen (mic hot, no UI affordance) for ~1 sec, which is exactly what the user hit.
+ */
+@Composable
+private fun RecordingStartingScreen(startedAtMs: Long, onStop: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(24.dp),
+        ) {
+            RecordingHeader(startedAtMs = startedAtMs, onStop = onStop, prominent = true)
+            Text("Starting recording…")
         }
     }
 }
