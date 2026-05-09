@@ -83,14 +83,18 @@ android {
       dimension = "engine"
       applicationIdSuffix = ".whisper"
       versionNameSuffix = "-whisper"
-      resValue("string", "bidet_app_name_flavor", "Bidet AI · Whisper")
+      // 2026-05-09: launcher-truncation fix. Earlier "Bidet AI · Whisper" cut off as "Bidet…"
+      // in launcher grids, leaving Mark unable to tell three Bidet variants apart at a glance.
+      // Engine-name first puts the distinguishing token before the truncation point AND sorts
+      // the two flavor APKs apart from each other in the alphabetical launcher grid.
+      resValue("string", "bidet_app_name_flavor", "Whisper · Bidet")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "false")
     }
     create("gemma") {
       dimension = "engine"
       applicationIdSuffix = ".gemma"
       versionNameSuffix = "-gemma"
-      resValue("string", "bidet_app_name_flavor", "Bidet AI · Gemma")
+      resValue("string", "bidet_app_name_flavor", "Gemma · Bidet")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "true")
     }
   }
