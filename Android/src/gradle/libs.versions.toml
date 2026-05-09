@@ -1,8 +1,9 @@
 # Modifications Copyright 2026 bidet-ai contributors. Changed: drop netOpenidAppauth (HF OAuth
-# stripped), pin litertlm ≥0.10.1 (currently 0.11.0 — keep), add whisper-jni for ASR, add
-# okhttp for the optional debug Tp3Sender webhook, add datastore-preferences + lifecycle-runtime-
-# compose + kotlinx-coroutines-test for the bidet/* code and tests, Phase 4A.1 strip firebase-bom
-# + firebase-analytics + firebase-messaging libraries + the google-services plugin alias
+# stripped), pin litertlm ≥0.10.1 (currently 0.11.0 — keep), Phase 3 added whisper-jni for ASR
+# (REMOVED 2026-05-08 in favor of whisper.cpp NDK build — see comment lower), add okhttp for
+# the optional debug Tp3Sender webhook, add datastore-preferences + lifecycle-runtime-compose +
+# kotlinx-coroutines-test for the bidet/* code and tests, Phase 4A.1 strip firebase-bom +
+# firebase-analytics + firebase-messaging libraries + the google-services plugin alias
 # (zero-telemetry hard rule).
 [versions]
 agp = "8.8.2"
@@ -54,7 +55,9 @@ moshi = "1.15.2"
 ksp = "2.3.6"
 mlkit-genai-prompt = "1.0.0-beta2"  # Ref: https://developers.google.com/ml-kit/genai/prompt/android/get-started#configure-project
 # bidet-ai dependencies
-whisperJni = "1.7.1"
+# whisperJni REMOVED 2026-05-08 — the io.github.givimad:whisper-jni artifact was a desktop
+# JVM JAR with zero Android binaries (Bug C / Issue #10). Replaced with a whisper.cpp NDK
+# build via git submodule under Android/src/app/src/main/cpp/whisper.cpp + CMakeLists.txt.
 okhttp = "4.12.0"
 kotlinxCoroutinesTest = "1.8.1"
 # bidet-ai Phase 4A: Room for session persistence (sessions list + detail).
@@ -120,7 +123,7 @@ moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.re
 moshi-kotlin-codegen = { group = "com.squareup.moshi", name = "moshi-kotlin-codegen", version.ref = "moshi" }
 mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkit-genai-prompt" }
 # bidet-ai libraries
-whisper-jni = { group = "io.github.givimad", name = "whisper-jni", version.ref = "whisperJni" }
+# whisper-jni library entry REMOVED 2026-05-08 — see version comment above.
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
 # bidet-ai Phase 4A: Room persistence (sessions list, restore, export).

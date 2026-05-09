@@ -18,36 +18,41 @@ package com.google.ai.edge.gallery.bidet.transcription
 
 import android.content.Context
 import android.util.Log
-import io.github.givimad.whisperjni.WhisperContext
-import io.github.givimad.whisperjni.WhisperFullParams
-import io.github.givimad.whisperjni.WhisperJNI
+import com.whispercpp.whisper.WhisperContext
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Thin Kotlin wrapper around whisper-jni 1.7.1 (`io.github.givimad:whisper-jni`).
+ * Thin wrapper around the vendored whisper.cpp Android JNI ([WhisperContext]).
  *
- * Behaviour per brief §4 / §10:
+ * 2026-05-08 rewrite: replaced the broken `io.github.givimad:whisper-jni` desktop JAR (which
+ * shipped no Android binaries — Bug C / Issue #10) with a proper NDK build of whisper.cpp.
+ * Public API surface preserved: `initialize`, `transcribe`, `close`, `isReady`, `int16ToFloat32`.
+ * Callers in [TranscriptionWorker] and [com.google.ai.edge.gallery.bidet.service.RecordingService]
+ * compile unchanged.
+ *
+ * Behaviour:
  *  - Initialized once at app start.
  *  - Holds a single [WhisperContext]; whisper-tiny is single-threaded for inference, so we
  *    serialize calls externally (the [TranscriptionWorker] has only one consumer).
  *  - [transcribe] takes a Float32 PCM array (already normalized to ±1.0) at 16 kHz mono and
  *    returns the transcribed text.
  *  - The bundled model lives at `assets/whisper/ggml-tiny.en.bin` and is copied to
- *    `${context.filesDir}/whisper/ggml-tiny.en.bin` on first init (whisper-jni cannot read
- *    directly out of an APK asset stream).
+ *    `${context.filesDir}/whisper/ggml-tiny.en.bin` on first init (the native loader needs a
+ *    real filesystem path).
  *
- * Failure modes:
- *  - If model copy or context init fails, [isReady] returns false and [transcribe] throws.
- *    [TranscriptionWorker] catches this and emits the failure marker per chunk.
+ * Concurrency: [WhisperContext.transcribeData] and [WhisperContext.release] are `suspend`. We
+ * bridge to the existing synchronous API by using [runBlocking] inside [transcribe] and [close].
+ * Safe because [TranscriptionWorker] already wraps [transcribe] in `withContext(Dispatchers.Default)`
+ * — the runBlocking happens off the main thread.
  */
 class WhisperEngine(private val context: Context) {
 
-    private val whisperJni: WhisperJNI = WhisperJNI()
     private val ctxRef = AtomicReference<WhisperContext?>()
 
-    /** True once the model has been copied out of assets and the JNI context loaded. */
+    /** True once the model has been copied out of assets and the native context is loaded. */
     val isReady: Boolean get() = ctxRef.get() != null
 
     /**
@@ -59,12 +64,10 @@ class WhisperEngine(private val context: Context) {
     fun initialize(): Boolean {
         if (isReady) return true
         return try {
-            WhisperJNI.loadLibrary()
             val modelPath = ensureModelOnDisk()
-            val ctx = whisperJni.init(modelPath.toPath())
-                ?: throw IllegalStateException("WhisperJNI.init returned null for $modelPath")
+            val ctx = WhisperContext.createContextFromFile(modelPath.absolutePath)
             ctxRef.set(ctx)
-            Log.i(TAG, "initialize: loaded $modelPath (${modelPath.length()} bytes)")
+            Log.i(TAG, "initialize: loaded ${modelPath.absolutePath} (${modelPath.length()} bytes)")
             true
         } catch (t: Throwable) {
             Log.e(TAG, "initialize failed: ${t.message}", t)
@@ -89,27 +92,10 @@ class WhisperEngine(private val context: Context) {
         }
         val ctx = ctxRef.get()
             ?: throw IllegalStateException("WhisperEngine not initialized")
-        val params = WhisperFullParams().apply {
-            // English-only model + greedy sampling: lowest latency + adequate quality for
-            // brain-dump verbatim. Tweak in v0.2 if quality demands.
-            language = "en"
-            translate = false
-            printRealtime = false
-            printProgress = false
-            printTimestamps = false
-            noContext = true
-            singleSegment = false
+        val text = runBlocking {
+            ctx.transcribeData(floatPcm, printTimestamp = false)
         }
-        val rc = whisperJni.full(ctx, params, floatPcm, floatPcm.size)
-        if (rc != 0) {
-            throw IllegalStateException("WhisperJNI.full returned non-zero rc=$rc")
-        }
-        val n = whisperJni.fullNSegments(ctx)
-        val sb = StringBuilder()
-        for (i in 0 until n) {
-            sb.append(whisperJni.fullGetSegmentText(ctx, i))
-        }
-        return sb.toString().trim()
+        return text.trim()
     }
 
     /** Release native resources. Idempotent. */
@@ -117,17 +103,17 @@ class WhisperEngine(private val context: Context) {
     fun close() {
         ctxRef.getAndSet(null)?.let {
             try {
-                whisperJni.free(it)
+                runBlocking { it.release() }
             } catch (t: Throwable) {
-                Log.w(TAG, "close: free threw ${t.message}")
+                Log.w(TAG, "close: release threw ${t.message}")
             }
         }
     }
 
     /**
      * Copy the bundled model out of assets into [context.filesDir] on first call. Subsequent
-     * calls return the existing file. Whisper-jni's native side `mmap`s by path, so we need a
-     * real filesystem location.
+     * calls return the existing file. The native loader `mmap`s by path, so we need a real
+     * filesystem location.
      */
     private fun ensureModelOnDisk(): File {
         val dest = File(context.filesDir, "whisper/$ASSET_MODEL_NAME").apply {
