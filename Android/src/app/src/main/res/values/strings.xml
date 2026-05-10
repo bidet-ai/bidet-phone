@@ -23,6 +23,8 @@
   <string name="bidet_recording_channel_desc" translatable="false">Persistent notification while a brain-dump is being captured.</string>
   <string name="bidet_recording_notification_title" translatable="false">Bidet AI is recording</string>
   <string name="bidet_recording_notification_text" translatable="false">Tap the app to view the live transcript. The microphone is active.</string>
+  <string name="bidet_recording_starting_title" translatable="false">Bidet AI is starting</string>
+  <string name="bidet_recording_starting_text" translatable="false">Starting recording…</string>
   <string name="bidet_recording_stop_action" translatable="false">Stop</string>
   <!-- bidet-ai 2026-05-09: welcome-screen documentation for the recording-time cap
        (RecordingCaps.kt). One-line explanation under the Record/History buttons. Updates to
