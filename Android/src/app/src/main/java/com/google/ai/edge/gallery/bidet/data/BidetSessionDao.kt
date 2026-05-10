@@ -75,6 +75,32 @@ interface BidetSessionDao {
     suspend fun updateRawText(sessionId: String, text: String)
 
     /**
+     * Bug-1 fix (2026-05-10): atomic per-merge update called from
+     * [com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator]'s `onMutation`
+     * callback inside the merge mutex. One UPDATE writes both the rawText snapshot and the
+     * merged-chunk count so a process death between the two writes can't leave the row in
+     * a state where the count says "all chunks merged" but the text is from before the
+     * latest merge.
+     */
+    @Query(
+        "UPDATE bidet_sessions SET rawText = :text, mergedChunkCount = :mergedChunkCount " +
+            "WHERE sessionId = :sessionId"
+    )
+    suspend fun updateRawTextAndMergedChunkCount(
+        sessionId: String,
+        text: String,
+        mergedChunkCount: Int,
+    )
+
+    /**
+     * Bug-3 fix (2026-05-10): bump the produced-chunk count as the audio capture engine
+     * emits chunks. This is the denominator in the History "Transcribing N of M…" indicator.
+     * Called from RecordingService whenever AudioCaptureEngine's nextChunkIdx advances.
+     */
+    @Query("UPDATE bidet_sessions SET chunkCount = :chunkCount WHERE sessionId = :sessionId")
+    suspend fun updateChunkCount(sessionId: String, chunkCount: Int)
+
+    /**
      * Phase 4A.1: terminal write at end-of-recording. One atomic UPDATE replaces the
      * read/copy/update dance in [com.google.ai.edge.gallery.bidet.service.RecordingService.finalizeSessionRow]
      * so it doesn't race the in-flight rawText updates from the persist job.
@@ -82,6 +108,7 @@ interface BidetSessionDao {
     @Query(
         "UPDATE bidet_sessions SET endedAtMs = :endedAtMs, durationSeconds = :durationSeconds, " +
             "rawText = :rawText, chunkCount = :chunkCount, audioWavPath = :audioWavPath, " +
+            "mergedChunkCount = :mergedChunkCount, " +
             "notes = COALESCE(:notes, notes) WHERE sessionId = :sessionId"
     )
     suspend fun finalizeSession(
@@ -91,6 +118,7 @@ interface BidetSessionDao {
         rawText: String,
         chunkCount: Int,
         audioWavPath: String?,
+        mergedChunkCount: Int,
         notes: String?,
     )
 

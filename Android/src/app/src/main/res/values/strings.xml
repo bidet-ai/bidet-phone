@@ -26,6 +26,16 @@
   <string name="bidet_recording_starting_title" translatable="false">Bidet AI is starting</string>
   <string name="bidet_recording_starting_text" translatable="false">Starting recording…</string>
   <string name="bidet_recording_stop_action" translatable="false">Stop</string>
+  <!-- Bug-2 fix (2026-05-10): post-stop drain phase. The recording UI flips back to the
+       welcome screen but the foreground service stays alive until the worker drains the
+       queue. Notification + History row reuse the format string to render N of M. -->
+  <string name="bidet_recording_draining_title" translatable="false">Bidet AI is finishing up</string>
+  <string name="bidet_recording_draining_text_format" translatable="false">Transcribing %1$d of %2$d chunks remaining…</string>
+  <string name="bidet_recording_complete_title" translatable="false">Brain dump ready</string>
+  <string name="bidet_recording_complete_text_format" translatable="false">%1$d words transcribed across %2$d chunks.</string>
+  <!-- History row + SessionDetail banner: same N-of-M format, slightly different copy
+       so the "remaining" reads correctly in a list of session rows. -->
+  <string name="bidet_history_transcribing_format" translatable="false">Transcribing %1$d of %2$d chunks…</string>
   <!-- bidet-ai 2026-05-09: welcome-screen documentation for the recording-time cap
        (RecordingCaps.kt). One-line explanation under the Record/History buttons. Updates to
        the cap should also update this copy — keep them paired. -->
