@@ -30,17 +30,10 @@
        (RecordingCaps.kt). One-line explanation under the Record/History buttons. Updates to
        the cap should also update this copy — keep them paired. -->
   <string name="bidet_welcome_recording_cap_note" translatable="false">Records up to 45 min — a beep warns you 5 min before the end.</string>
-  <!-- v0.2 three-tab restructure (2026-05-09): RAW / Clean for me (Receptive Support) /
-       Clean for others (Expressive Support). Old four-tab labels kept as deprecated
-       aliases below so the SessionDetail history viewer keeps rendering pre-v0.2 rows
-       without a strings-rename churn. -->
-  <string name="bidet_tab_raw" translatable="false">RAW</string>
-  <string name="bidet_tab_clean_for_me" translatable="false">Clean for me</string>
-  <string name="bidet_tab_clean_for_others" translatable="false">Clean for others</string>
-  <!-- Deprecated v0.1 labels (still referenced from SessionDetailScreen for now). -->
-  <string name="bidet_tab_clean" translatable="false">CLEAN</string>
-  <string name="bidet_tab_analysis" translatable="false">ANALYSIS</string>
-  <string name="bidet_tab_forai" translatable="false">FORAI</string>
+  <!-- Two-tab restructure (2026-05-10): RAW lives at the top of the screen as a reading
+       base; below it is a chip row of two GENERATED tabs whose label is user-editable.
+       Default labels are NOT in strings.xml — they're pinned in TabPref.defaultLabel
+       so the editor's "Reset to default" button reads them through code. -->
   <string name="bidet_record_button" translatable="false">Record</string>
   <string name="bidet_stop_button" translatable="false">Stop</string>
   <string name="bidet_generate_button" translatable="false">Generate</string>
@@ -55,10 +48,6 @@
   <string name="bidet_clean_gen_cancel_action" translatable="false">Cancel</string>
   <string name="bidet_clean_gen_progress_label" translatable="false">Cleaning…</string>
   <string name="bidet_clean_gen_progress_format" translatable="false">%1$d / %2$d tokens</string>
-  <!-- v0.2 diff toggle: shown above the cached output on Clean-for-me / Clean-for-others.
-       Wording avoids "diff" jargon — Mark wants speaker-readable copy. -->
-  <string name="bidet_show_changes_label" translatable="false">Show me what changed</string>
-  <string name="bidet_show_changes_legend" translatable="false">Green = added by AI · struck through = your words the AI dropped</string>
   <string name="bidet_consent_title" translatable="false">About Gemma 4</string>
   <string name="bidet_consent_body" translatable="false">This app uses Google\'s Gemma 4 model running locally on your device. By continuing, you agree to the Gemma Terms of Use and Prohibited Use Policy.</string>
   <string name="bidet_consent_terms_link" translatable="false">https://ai.google.dev/gemma/terms</string>
@@ -75,32 +64,21 @@
   <string name="bidet_settings_send_to_tp3" translatable="false">Send to TP3</string>
   <string name="bidet_chunks_behind" translatable="false">Transcription behind by %1$d chunks</string>
   <string name="bidet_chunk_failure_marker" translatable="false">[chunk %1$d transcription failed]</string>
-  <!-- v0.2 preset chips. Internal taxonomy: "Receptive Support" presets ride on Tab 2
-       ("Clean for me"); "Expressive Support" presets ride on Tab 3 ("Clean for others").
-       User-visible labels deliberately avoid clinical terminology per banWordCheck rules —
-       internal asset filenames may differ. -->
-  <string name="bidet_preset_section_label" translatable="false">Output style</string>
-  <!-- Receptive (Clean for me) presets. Order = display order; Default first, Custom last. -->
-  <string name="bidet_preset_summary" translatable="false">Summary</string>
-  <string name="bidet_preset_short_sentences" translatable="false">Short sentences</string>
-  <string name="bidet_preset_bullets_and_actions" translatable="false">Bullets and actions</string>
-  <string name="bidet_preset_tangent_organizer" translatable="false">Tangent organizer</string>
-  <string name="bidet_preset_plain_language" translatable="false">Plain language</string>
-  <!-- Expressive (Clean for others) presets. -->
-  <string name="bidet_preset_ai_ingest_markdown" translatable="false">AI-ingestion markdown</string>
-  <string name="bidet_preset_email_draft" translatable="false">Email draft</string>
-  <string name="bidet_preset_ai_agent_input" translatable="false">AI agent input</string>
-  <!-- Shared on both axes. -->
-  <string name="bidet_preset_custom" translatable="false">Custom…</string>
-  <!-- Custom-prompt BottomSheet copy. -->
-  <string name="bidet_preset_sheet_title" translatable="false">Custom prompt</string>
-  <string name="bidet_preset_sheet_hint" translatable="false">Tell Gemma exactly how to reshape your brain dump. The transcript will be supplied automatically — describe only the output you want.</string>
-  <string name="bidet_preset_sheet_placeholder" translatable="false">e.g. Rewrite as a one-page agenda for a 30-minute meeting with my supervisor.</string>
-  <string name="bidet_preset_sheet_save" translatable="false">Save and use</string>
-  <string name="bidet_preset_sheet_cancel" translatable="false">Cancel</string>
-  <!-- Tab idle hints. -->
-  <string name="bidet_clean_for_me_idle_hint" translatable="false">Pick an output style above, then tap Generate to reshape your brain dump for you to read.</string>
-  <string name="bidet_clean_for_others_idle_hint" translatable="false">Pick an output style above, then tap Generate to reshape your brain dump for someone else (or another AI) to read.</string>
+  <!-- Two-tab restructure (2026-05-10): RAW lives at the top of the screen as a reading
+       base; below it is a chip row of two GENERATED tabs whose label + prompt template
+       are both user-editable via the pencil icon next to each chip. -->
+  <string name="bidet_edit_tab_label" translatable="false">Edit tab</string>
+  <string name="bidet_tab_editor_title" translatable="false">Customize this tab</string>
+  <string name="bidet_tab_editor_label_field" translatable="false">Tab name</string>
+  <string name="bidet_tab_editor_prompt_field" translatable="false">Prompt template</string>
+  <string name="bidet_tab_editor_prompt_placeholder" translatable="false">e.g. Rewrite this brain dump as a one-page agenda for a 30-minute meeting with my supervisor.</string>
+  <string name="bidet_tab_editor_prompt_hint" translatable="false">Use {transcript} where the brain-dump text should be inserted. The default prompts already do.</string>
+  <string name="bidet_tab_editor_save" translatable="false">Save</string>
+  <string name="bidet_tab_editor_reset" translatable="false">Reset to default</string>
+  <string name="bidet_tab_editor_cancel" translatable="false">Cancel</string>
+  <!-- Idle hints shown below the chip row when a tab has not yet been generated. -->
+  <string name="bidet_clean_for_me_idle_hint" translatable="false">Tap Generate to reshape your brain dump using this tab\'s prompt.</string>
+  <string name="bidet_clean_for_others_idle_hint" translatable="false">Tap Generate to reshape your brain dump using this tab\'s prompt.</string>
   <!-- TODO(jingjin): Add translation support when i18n is ready. -->
   <string name="about_this_update" translatable="false">About this update</string>
   <string name="all" translatable="false">All</string>

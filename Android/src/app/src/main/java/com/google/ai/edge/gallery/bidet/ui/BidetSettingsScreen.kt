@@ -100,7 +100,7 @@ fun BidetSettingsScreen(
         OutlinedTextField(
             value = promptReceptiveOverride,
             onValueChange = { promptReceptiveOverride = it },
-            label = { Text("Receptive (Clean for me) prompt override (blank = use preset)") },
+            label = { Text("Receptive (Clean for me) prompt override (blank = use tab pref)") },
             modifier = Modifier.fillMaxWidth(),
             minLines = 4,
             maxLines = 12,
@@ -108,7 +108,7 @@ fun BidetSettingsScreen(
         OutlinedTextField(
             value = promptExpressiveOverride,
             onValueChange = { promptExpressiveOverride = it },
-            label = { Text("Expressive (Clean for others) prompt override (blank = use preset)") },
+            label = { Text("Expressive (Clean for others) prompt override (blank = use tab pref)") },
             modifier = Modifier.fillMaxWidth(),
             minLines = 4,
             maxLines = 12,

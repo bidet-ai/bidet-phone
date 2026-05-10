@@ -19,45 +19,53 @@ package com.google.ai.edge.gallery.bidet.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.ai.edge.gallery.R
-import kotlinx.coroutines.launch
 
 /**
- * v0.2 three-tab Compose screen. Brief: "Collapse 4 tabs into 3 (RAW / Clean for me /
- * Clean for others)".
+ * Two-tab restructure (2026-05-10): RAW at the top of the screen as a reading base, then a
+ * chip row of two GENERATED tabs below it ("Clean for me" and "Clean for others" by
+ * default; both editable), and the active tab's generated content under that.
  *
- * Tab indices (locked):
- *   0 — RAW                — live, autoscroll while recording. RawTabContent.
- *   1 — Clean for me       — RECEPTIVE Support (output FOR the speaker).
- *   2 — Clean for others   — EXPRESSIVE Support (output FROM the speaker).
+ * Vertical layout:
+ *   ┌─────────────────────────────────────┐
+ *   │  TopAppBar (record / stop / hist.)  │
+ *   ├─────────────────────────────────────┤
+ *   │  RecordingHeader (timer)            │  ← only while recording
+ *   ├─────────────────────────────────────┤
+ *   │  RAW transcript (scrollable, 1f)    │  ← ALWAYS visible
+ *   ├─────────────────────────────────────┤
+ *   │  Tab chip row: [Clean for me ✎]     │
+ *   │                [Clean for others ✎] │
+ *   ├─────────────────────────────────────┤
+ *   │  Active tab's generated content     │  ← Idle / Streaming / Cached
+ *   └─────────────────────────────────────┘
  *
- * The v0.1 four-tab layout (RAW / CLEAN / ANALYSIS / FORAI) collapsed to three because
- * CLEAN's "readable summary" use-case and ANALYSIS's "tangent-organized analysis" use-case
- * are both shapes of the same Receptive Support axis — different presets of one tab is the
- * right machinery, not separate tabs. Tab 4's customizable-prompt machinery now applies to
- * BOTH Clean tabs via [SupportPreset]'s axis field.
+ * The RAW area takes the upper half of the screen via a `weight(1f)`, so it grows on tall
+ * devices and shrinks gracefully when the keyboard appears for the editor sheet. The
+ * generated content uses its own `weight(1f)`, giving roughly 50/50 vertical split. Mark
+ * spends most of his attention on RAW; the generated views are reference, not the headline.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,12 +74,15 @@ fun BidetTabsScreen(
     isRecording: Boolean,
     onToggleRecording: () -> Unit,
     onOpenHistory: () -> Unit = {},
-    // Bug B fix (2026-05-09): pass-through for the recording header timer. 0L when not
-    // recording. Default keeps the kt-compatible signature for any test/preview call sites.
     recordingStartedAtMs: Long = 0L,
 ) {
-    val pagerState = rememberPagerState(initialPage = TAB_INDEX_RAW, pageCount = { TAB_TITLES.size })
-    val coroutineScope = rememberCoroutineScope()
+    val raw by viewModel.aggregator.rawFlow.collectAsStateWithLifecycle()
+    val tabPrefs by viewModel.tabPrefs.collectAsStateWithLifecycle()
+    val activeAxis by viewModel.activeAxis.collectAsStateWithLifecycle()
+    val receptiveState by viewModel.receptiveState.collectAsStateWithLifecycle()
+    val expressiveState by viewModel.expressiveState.collectAsStateWithLifecycle()
+
+    var editingAxis by remember { mutableStateOf<SupportAxis?>(null) }
 
     Scaffold(
         topBar = {
@@ -79,10 +90,7 @@ fun BidetTabsScreen(
                 title = { Text(stringResource(R.string.bidet_app_name)) },
                 actions = {
                     IconButton(onClick = onOpenHistory) {
-                        Icon(
-                            Icons.Filled.History,
-                            contentDescription = "History",
-                        )
+                        Icon(Icons.Filled.History, contentDescription = "History")
                     }
                     IconButton(onClick = onToggleRecording) {
                         if (isRecording) {
@@ -108,77 +116,65 @@ fun BidetTabsScreen(
                     onStop = onToggleRecording,
                 )
             }
-            TabRow(selectedTabIndex = pagerState.currentPage) {
-                TAB_TITLES.forEachIndexed { index, titleResId ->
-                    Tab(
-                        selected = pagerState.currentPage == index,
-                        onClick = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(index) }
-                        },
-                        text = { Text(stringResource(titleResId)) },
-                    )
-                }
+
+            // RAW reading base — always visible. Takes ~half the screen via weight.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                RawTabContent(rawText = raw, isRecording = isRecording)
             }
 
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-            ) { page ->
-                Box(modifier = Modifier.fillMaxSize()) {
-                    when (page) {
-                        TAB_INDEX_RAW -> {
-                            val raw by viewModel.aggregator.rawFlow.collectAsStateWithLifecycle()
-                            RawTabContent(rawText = raw, isRecording = isRecording)
-                        }
-                        TAB_INDEX_CLEAN_FOR_ME -> {
-                            val state by viewModel.receptiveState.collectAsStateWithLifecycle()
-                            val activePreset by viewModel.receptivePreset.collectAsStateWithLifecycle()
-                            val customPrompt by viewModel.receptiveCustomPrompt.collectAsStateWithLifecycle()
-                            CleanTabContent(
-                                axis = SupportAxis.RECEPTIVE,
-                                state = state,
-                                activePresetId = activePreset,
-                                customPrompt = customPrompt,
-                                rawTextProvider = { viewModel.currentRaw() },
-                                onSelectPreset = { viewModel.setPreset(SupportAxis.RECEPTIVE, it) },
-                                onSaveCustomPrompt = { viewModel.setCustomPrompt(SupportAxis.RECEPTIVE, it) },
-                                onGenerate = { viewModel.generateReceptive() },
-                            )
-                        }
-                        TAB_INDEX_CLEAN_FOR_OTHERS -> {
-                            val state by viewModel.expressiveState.collectAsStateWithLifecycle()
-                            val activePreset by viewModel.expressivePreset.collectAsStateWithLifecycle()
-                            val customPrompt by viewModel.expressiveCustomPrompt.collectAsStateWithLifecycle()
-                            CleanTabContent(
-                                axis = SupportAxis.EXPRESSIVE,
-                                state = state,
-                                activePresetId = activePreset,
-                                customPrompt = customPrompt,
-                                rawTextProvider = { viewModel.currentRaw() },
-                                onSelectPreset = { viewModel.setPreset(SupportAxis.EXPRESSIVE, it) },
-                                onSaveCustomPrompt = { viewModel.setCustomPrompt(SupportAxis.EXPRESSIVE, it) },
-                                onGenerate = { viewModel.generateExpressive() },
-                            )
-                        }
-                    }
+            HorizontalDivider()
+
+            TabChipRow(
+                prefs = tabPrefs,
+                activeAxis = activeAxis,
+                onSelectAxis = { viewModel.selectAxis(it) },
+                onEditAxis = { editingAxis = it },
+                editingEnabled = true,
+            )
+
+            // Active-axis generated body. Takes the other half of the screen.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                when (activeAxis) {
+                    SupportAxis.RECEPTIVE -> CleanTabContent(
+                        axis = SupportAxis.RECEPTIVE,
+                        state = receptiveState,
+                        onGenerate = { viewModel.generateReceptive() },
+                    )
+                    SupportAxis.EXPRESSIVE -> CleanTabContent(
+                        axis = SupportAxis.EXPRESSIVE,
+                        state = expressiveState,
+                        onGenerate = { viewModel.generateExpressive() },
+                    )
                 }
             }
         }
     }
 
-    // When a new recording starts, reset all non-RAW tab states so user is not staring at
-    // a stale Clean for me / Clean for others from the previous session.
+    // Bottom-sheet editor. Hosting the sheet at the screen level (rather than inside the
+    // chip row) keeps the row composable stateless and lets us pull the latest TabPref
+    // each time the user reopens — so a Reset followed by a re-open shows defaults.
+    editingAxis?.let { axis ->
+        val pref = tabPrefs.firstOrNull { it.axis == axis }
+            ?: TabPref(axis, TabPref.defaultLabel(axis), "")
+        TabPrefEditorSheet(
+            initialLabel = pref.label,
+            initialPrompt = pref.promptTemplate,
+            onSave = { newLabel, newPrompt ->
+                viewModel.saveTabPref(TabPref(axis, newLabel, newPrompt))
+                editingAxis = null
+            },
+            onResetToDefault = {
+                viewModel.resetTabPref(axis)
+                // Refresh-then-close so the next sheet open shows the new defaults — without
+                // closing here, the same draft stays in the OutlinedTextFields because they
+                // remember-saveable on initialLabel/initialPrompt.
+                editingAxis = null
+            },
+            onDismiss = { editingAxis = null },
+        )
+    }
+
     LaunchedEffect(isRecording) {
         if (isRecording) viewModel.resetTabs()
     }
 }
-
-const val TAB_INDEX_RAW: Int = 0
-const val TAB_INDEX_CLEAN_FOR_ME: Int = 1
-const val TAB_INDEX_CLEAN_FOR_OTHERS: Int = 2
-
-private val TAB_TITLES: List<Int> = listOf(
-    R.string.bidet_tab_raw,
-    R.string.bidet_tab_clean_for_me,
-    R.string.bidet_tab_clean_for_others,
-)

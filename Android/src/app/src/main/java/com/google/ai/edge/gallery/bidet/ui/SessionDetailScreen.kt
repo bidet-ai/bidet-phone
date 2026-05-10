@@ -20,33 +20,31 @@ import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.compose.runtime.LaunchedEffect
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
-import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.data.BidetSession
 import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -60,24 +58,26 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * SessionDetailScreen — Phase 4A + v0.2 three-tab restructure.
+ * SessionDetailScreen — Phase 4A + two-tab restructure (2026-05-10).
  *
- * Renders the v0.2 three-tab UX (RAW / Clean for me / Clean for others) but the source of
- * truth is the persisted [BidetSession] row, not a live aggregator. CLEAN-FOR-ME generation
- * runs against the loaded `rawText`; outputs are persisted back to the row's `cleanCached`
- * (Receptive) / `foraiCached` (Expressive) columns. The legacy `analysisCached` column is
- * retained for v0.1 history rows but not written to in v0.2.
+ * Layout matches [BidetTabsScreen]: RAW at the top as the reading base, chip row of two
+ * editable tabs, then the active tab's content body. The persisted [BidetSession] row is
+ * the source of truth for RAW + the cached outputs.
  *
- * Persistence mapping (Phase 4A schema, retained for v0.2 to avoid a migration):
- *   bidet_sessions.cleanCached      ← Receptive  (Clean for me)  output
- *   bidet_sessions.foraiCached      ← Expressive (Clean for others) output
- *   bidet_sessions.analysisCached   ← unused in v0.2; populated only on pre-v0.2 rows
+ * Persistence mapping retained from Phase 4A:
+ *   bidet_sessions.cleanCached  ← Receptive  (Clean for me)  output
+ *   bidet_sessions.foraiCached  ← Expressive (Clean for others) output
+ *
+ * Editing tab labels/prompts here updates the global [TabPref] (the same pair the live
+ * recorder uses) — that's intentional. Renaming "Clean for others" to "Email tone" while
+ * looking at yesterday's brain dump should make tomorrow's chip row read "Email tone" too.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,9 +89,13 @@ fun SessionDetailScreen(
     LaunchedEffect(sessionId) { viewModel.bind(sessionId) }
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val tabPrefs by viewModel.tabPrefs.collectAsStateWithLifecycle()
+    val activeAxis by viewModel.activeAxis.collectAsStateWithLifecycle()
+    val receptiveState by viewModel.receptiveState.collectAsStateWithLifecycle()
+    val expressiveState by viewModel.expressiveState.collectAsStateWithLifecycle()
+
     val context = LocalContext.current
-    val pagerState = rememberPagerState(initialPage = TAB_INDEX_RAW, pageCount = { TAB_TITLES.size })
-    val coroutineScope = rememberCoroutineScope()
+    var editingAxis by remember { mutableStateOf<SupportAxis?>(null) }
 
     val session = state.session
 
@@ -133,67 +137,56 @@ fun SessionDetailScreen(
                 return@Column
             }
 
-            TabRow(selectedTabIndex = pagerState.currentPage) {
-                TAB_TITLES.forEachIndexed { index, titleResId ->
-                    Tab(
-                        selected = pagerState.currentPage == index,
-                        onClick = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(index) }
-                        },
-                        text = { Text(stringResource(titleResId)) },
-                    )
-                }
+            // RAW reading base — always visible.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                RawTabContent(rawText = session.rawText, isRecording = false)
             }
 
-            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-                Box(modifier = Modifier.fillMaxSize()) {
-                    when (page) {
-                        TAB_INDEX_RAW -> RawTabContent(
-                            rawText = session.rawText,
-                            isRecording = false,
-                        )
-                        TAB_INDEX_CLEAN_FOR_ME -> {
-                            val tabState by viewModel.receptiveState.collectAsStateWithLifecycle()
-                            // History view: chip selection + custom prompt are inert because
-                            // the cached output was produced under whichever preset was
-                            // active at recording time. Generating again belongs to the live
-                            // recording flow, not the history viewer.
-                            CleanTabContent(
-                                axis = SupportAxis.RECEPTIVE,
-                                state = tabState,
-                                activePresetId = SupportPreset.RECEPTIVE_SUMMARY.id,
-                                customPrompt = "",
-                                rawTextProvider = { session.rawText },
-                                onSelectPreset = { /* no-op in history view */ },
-                                onSaveCustomPrompt = { /* no-op in history view */ },
-                                onGenerate = { viewModel.generate(SupportAxis.RECEPTIVE) },
-                            )
-                        }
-                        TAB_INDEX_CLEAN_FOR_OTHERS -> {
-                            val tabState by viewModel.expressiveState.collectAsStateWithLifecycle()
-                            CleanTabContent(
-                                axis = SupportAxis.EXPRESSIVE,
-                                state = tabState,
-                                activePresetId = SupportPreset.EXPRESSIVE_AI_INGEST.id,
-                                customPrompt = "",
-                                rawTextProvider = { session.rawText },
-                                onSelectPreset = { /* no-op in history view */ },
-                                onSaveCustomPrompt = { /* no-op in history view */ },
-                                onGenerate = { viewModel.generate(SupportAxis.EXPRESSIVE) },
-                            )
-                        }
-                    }
+            HorizontalDivider()
+
+            TabChipRow(
+                prefs = tabPrefs,
+                activeAxis = activeAxis,
+                onSelectAxis = { viewModel.selectAxis(it) },
+                onEditAxis = { editingAxis = it },
+                editingEnabled = true,
+            )
+
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                when (activeAxis) {
+                    SupportAxis.RECEPTIVE -> CleanTabContent(
+                        axis = SupportAxis.RECEPTIVE,
+                        state = receptiveState,
+                        onGenerate = { viewModel.generate(SupportAxis.RECEPTIVE) },
+                    )
+                    SupportAxis.EXPRESSIVE -> CleanTabContent(
+                        axis = SupportAxis.EXPRESSIVE,
+                        state = expressiveState,
+                        onGenerate = { viewModel.generate(SupportAxis.EXPRESSIVE) },
+                    )
                 }
             }
         }
     }
-}
 
-private val TAB_TITLES: List<Int> = listOf(
-    R.string.bidet_tab_raw,
-    R.string.bidet_tab_clean_for_me,
-    R.string.bidet_tab_clean_for_others,
-)
+    editingAxis?.let { axis ->
+        val pref = tabPrefs.firstOrNull { it.axis == axis }
+            ?: TabPref(axis, TabPref.defaultLabel(axis), "")
+        TabPrefEditorSheet(
+            initialLabel = pref.label,
+            initialPrompt = pref.promptTemplate,
+            onSave = { newLabel, newPrompt ->
+                viewModel.saveTabPref(TabPref(axis, newLabel, newPrompt))
+                editingAxis = null
+            },
+            onResetToDefault = {
+                viewModel.resetTabPref(axis)
+                editingAxis = null
+            },
+            onDismiss = { editingAxis = null },
+        )
+    }
+}
 
 /** State of the currently-loaded session. */
 data class SessionDetailUiState(
@@ -207,8 +200,7 @@ data class SessionDetailUiState(
  * Lifecycle: caller invokes [bind] from a [LaunchedEffect] keyed on `sessionId`. After bind,
  * the view-model observes the row via the DAO and seeds the tab states from the persisted
  * `cleanCached` / `foraiCached` columns so re-opens are instant. v0.1 rows that have
- * `analysisCached` populated are also surfaced — we prefer Receptive's cached output, but
- * fall back to the analysis column if Receptive is null and analysis is non-null.
+ * `analysisCached` populated are also surfaced via Receptive's column.
  */
 @HiltViewModel
 class SessionDetailViewModel @Inject constructor(
@@ -217,19 +209,17 @@ class SessionDetailViewModel @Inject constructor(
     private val gemma: BidetGemmaClient,
 ) : ViewModel() {
 
+    private val tabPrefRepo: TabPrefRepository = DataStoreTabPrefRepository(context)
+
     private val sessionIdFlow = MutableStateFlow("")
 
-    /** Wire the active session id. Idempotent — re-binding the same id is a no-op. */
     fun bind(sessionId: String) {
         if (sessionIdFlow.value == sessionId) return
         sessionIdFlow.value = sessionId
-        // Re-seed tab states from the persisted row.
         _receptiveState.value = TabState.Idle
         _expressiveState.value = TabState.Idle
         viewModelScope.launch {
             val row = sessionDao.getById(sessionId) ?: return@launch
-            // Receptive prefers cleanCached (the v0.1 CLEAN tab's column); falls back to
-            // analysisCached for old rows that were generated under the v0.1 ANALYSIS tab.
             val receptive = row.cleanCached ?: row.analysisCached
             receptive?.let {
                 _receptiveState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs)
@@ -238,6 +228,7 @@ class SessionDetailViewModel @Inject constructor(
                 _expressiveState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs)
             }
         }
+        viewModelScope.launch { refreshTabPrefs() }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -266,21 +257,54 @@ class SessionDetailViewModel @Inject constructor(
     private val _expressiveState = MutableStateFlow<TabState>(TabState.Idle)
     val expressiveState: StateFlow<TabState> = _expressiveState.asStateFlow()
 
+    private val _tabPrefs = MutableStateFlow<List<TabPref>>(
+        SupportAxis.ALL.map { axis -> TabPref(axis, TabPref.defaultLabel(axis), "") }
+    )
+    val tabPrefs: StateFlow<List<TabPref>> = _tabPrefs.asStateFlow()
+
+    private val _activeAxis = MutableStateFlow(SupportAxis.RECEPTIVE)
+    val activeAxis: StateFlow<SupportAxis> = _activeAxis.asStateFlow()
+
+    suspend fun refreshTabPrefs() {
+        val refreshed = SupportAxis.ALL.map { axis ->
+            val defaultPrompt = withContext(Dispatchers.IO) {
+                context.assets.open(TabPref.defaultPromptAssetPath(axis)).bufferedReader().use { it.readText() }
+            }
+            tabPrefRepo.read(axis, defaultPrompt)
+        }
+        _tabPrefs.value = refreshed
+    }
+
+    fun saveTabPref(pref: TabPref) {
+        viewModelScope.launch {
+            tabPrefRepo.write(pref)
+            refreshTabPrefs()
+            // Edit changed the prompt for this axis → cached output is stale; reset to Idle so
+            // the user sees Generate rather than yesterday's text under today's prompt.
+            stateFlowFor(pref.axis).value = TabState.Idle
+        }
+    }
+
+    fun resetTabPref(axis: SupportAxis) {
+        viewModelScope.launch {
+            tabPrefRepo.resetToDefault(axis)
+            refreshTabPrefs()
+            stateFlowFor(axis).value = TabState.Idle
+        }
+    }
+
+    fun selectAxis(axis: SupportAxis) {
+        _activeAxis.value = axis
+    }
+
     /**
-     * Run a Gemma generation against the persisted RAW for [axis]. The history view always
-     * uses the axis's default preset (Summary for Receptive, AI-ingestion markdown for
-     * Expressive); preset switching belongs to the live recording flow. The output is
-     * persisted to the column that backs that axis (cleanCached / foraiCached).
+     * Run a Gemma generation against the persisted RAW for [axis]. Resolves the system prompt
+     * via the same TabPrefRepository the live recorder uses (debug override → user-edited
+     * prompt → bundled default), so editing a tab in history view affects subsequent
+     * recordings consistently.
      */
     fun generate(axis: SupportAxis) {
-        val target = when (axis) {
-            SupportAxis.RECEPTIVE -> _receptiveState
-            SupportAxis.EXPRESSIVE -> _expressiveState
-        }
-        val assetPath = when (axis) {
-            SupportAxis.RECEPTIVE -> "prompts/receptive_default.txt"
-            SupportAxis.EXPRESSIVE -> "prompts/expressive_default.txt"
-        }
+        val target = stateFlowFor(axis)
 
         viewModelScope.launch {
             val sessionId = sessionIdFlow.value
@@ -293,9 +317,7 @@ class SessionDetailViewModel @Inject constructor(
             }
             target.value = TabState.Generating
             try {
-                val systemPrompt = withContext(Dispatchers.IO) {
-                    context.assets.open(assetPath).bufferedReader().use { it.readText() }
-                }
+                val systemPrompt = resolveSystemPrompt(axis)
                 val result = withContext(Dispatchers.Default) {
                     gemma.runInference(
                         systemPrompt = systemPrompt,
@@ -306,10 +328,8 @@ class SessionDetailViewModel @Inject constructor(
                 }
                 val now = System.currentTimeMillis()
                 target.value = TabState.Cached(result, now)
-                // Phase 4A.1: column-targeted UPDATE. v0.2 maps the two live tabs onto the
-                // existing two columns to avoid a Room migration:
-                //   Receptive  (Clean for me)     → cleanCached
-                //   Expressive (Clean for others) → foraiCached
+                // Phase 4A.1: column-targeted UPDATE. The two slot indices map onto the
+                // existing two columns to avoid a Room migration.
                 when (axis) {
                     SupportAxis.RECEPTIVE -> sessionDao.updateCleanCached(sessionId, result)
                     SupportAxis.EXPRESSIVE -> sessionDao.updateForaiCached(sessionId, result)
@@ -318,5 +338,26 @@ class SessionDetailViewModel @Inject constructor(
                 target.value = TabState.Failed(t.message ?: "Generation failed")
             }
         }
+    }
+
+    /**
+     * Resolve the system prompt for [axis]. Mirrors [BidetTabsViewModel.resolveSystemPrompt]:
+     * debug override > user-edited prompt > bundled default.
+     */
+    private suspend fun resolveSystemPrompt(axis: SupportAxis): String {
+        val prefs = context.bidetDataStore.data.first()
+        val override = prefs[BidetTabsViewModel.promptOverrideKey(axis)]
+        if (!override.isNullOrBlank()) return override
+        val defaultPrompt = withContext(Dispatchers.IO) {
+            context.assets.open(TabPref.defaultPromptAssetPath(axis)).bufferedReader().use { it.readText() }
+        }
+        val pref = tabPrefRepo.read(axis, defaultPrompt)
+        val trimmed = pref.promptTemplate.trim()
+        return if (trimmed.isBlank()) defaultPrompt else pref.promptTemplate
+    }
+
+    private fun stateFlowFor(axis: SupportAxis): MutableStateFlow<TabState> = when (axis) {
+        SupportAxis.RECEPTIVE -> _receptiveState
+        SupportAxis.EXPRESSIVE -> _expressiveState
     }
 }
