@@ -178,7 +178,11 @@ class TranscriptAggregatorPersistenceTest {
     @Test
     fun mergedCountFlow_advancesInLockstepWithOnMutation() = runBlocking {
         val seenCounts = mutableListOf<Int>()
-        val aggregator = TranscriptAggregator(
+        // Forward-reference holder so the lambda can read mergedCountFlow on the same
+        // instance it's wired into. A plain `val aggregator = TranscriptAggregator(...)` that
+        // references `aggregator` from its own initializer doesn't compile (self-reference).
+        lateinit var aggregator: TranscriptAggregator
+        aggregator = TranscriptAggregator(
             onMutation = { _, count ->
                 // The flow value MUST already reflect the new count by the time onMutation
                 // runs — otherwise a History UI listener could read mergedCountFlow=N
