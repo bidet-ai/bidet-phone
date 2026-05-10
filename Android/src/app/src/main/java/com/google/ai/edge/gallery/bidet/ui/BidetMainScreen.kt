@@ -29,9 +29,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +59,8 @@ import com.google.ai.edge.gallery.bidet.consent.hasGemmaConsent
 import com.google.ai.edge.gallery.bidet.consent.recordGemmaConsent
 import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.download.BidetModelProvider
+import com.google.ai.edge.gallery.bidet.llm.BidetSharedLiteRtEngineProvider
+import com.google.ai.edge.gallery.bidet.llm.EngineState
 import com.google.ai.edge.gallery.bidet.service.RecordingService
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
 import dagger.hilt.android.EntryPointAccessors
@@ -181,11 +186,16 @@ private sealed class Phase {
  * Phase 4A.1: app-launch orphan-recovery sweep needs the [BidetSessionDao]. Top-level
  * `BidetMainScreen` doesn't have an injected ViewModel that exposes the DAO, so we reach
  * for it via a Hilt EntryPoint rather than introducing a new VM just for a one-shot.
+ *
+ * 2026-05-09: also exposes the [BidetSharedLiteRtEngineProvider] so the welcome screen can
+ * gate the Record button on engine readiness without forcing a Hilt-injected ViewModel
+ * onto the gating UI (which is just two `collectAsState()` reads).
  */
 @EntryPoint
 @InstallIn(SingletonComponent::class)
 internal interface BidetMainScreenDaoEntryPoint {
     fun bidetSessionDao(): BidetSessionDao
+    fun sharedEngineProvider(): BidetSharedLiteRtEngineProvider
 }
 
 internal object BidetMainScreenHiltEntryPoint {
@@ -194,6 +204,12 @@ internal object BidetMainScreenHiltEntryPoint {
             context.applicationContext,
             BidetMainScreenDaoEntryPoint::class.java,
         ).bidetSessionDao()
+
+    fun sharedEngineProvider(context: Context): BidetSharedLiteRtEngineProvider =
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            BidetMainScreenDaoEntryPoint::class.java,
+        ).sharedEngineProvider()
 }
 
 /**
@@ -209,6 +225,17 @@ private fun ReadyScreen(
 ) {
     val context = LocalContext.current
     val viewModel: BidetTabsViewModel = hiltViewModel()
+
+    // 2026-05-09: engine pre-warm gate. Pull the shared engine provider so the welcome
+    // screen can disable the Record button while the 3.6 GB Gemma engine is still loading.
+    // On the whisper flavor the provider stays Idle forever (no one calls ensureReady) —
+    // we still bind to it here but [shouldShowEngineGate] short-circuits to false on
+    // whisper builds so the button works as before.
+    val sharedEngineProvider = remember(context) {
+        BidetMainScreenHiltEntryPoint.sharedEngineProvider(context)
+    }
+    val engineState by sharedEngineProvider.state.collectAsState()
+    val scope = rememberCoroutineScope()
 
     var serviceRef by remember { mutableStateOf<RecordingService?>(null) }
 
@@ -317,7 +344,17 @@ private fun ReadyScreen(
                     // the actual fix.
                     engineInitError?.let { err -> EngineInitFailedBanner(err) }
                     Text("Tap Record to begin a brain-dump.")
-                    Button(onClick = onToggleRecording) { Text("Record") }
+                    // 2026-05-09: engine pre-warm gate. The 3.6 GB Gemma engine load takes
+                    // 10-30s of native work on the Pixel 8 Pro; the welcome screen lets
+                    // the user read the rest of the page while the load runs in the
+                    // background. Record is disabled until state == Ready.
+                    EngineGatedRecordButton(
+                        engineState = engineState,
+                        onRecord = onToggleRecording,
+                        onRetry = {
+                            scope.launch { sharedEngineProvider.ensureReady() }
+                        },
+                    )
                     Button(onClick = onOpenHistory) { Text("History") }
                     Text(
                         text = stringResource(R.string.bidet_welcome_recording_cap_note),
@@ -326,6 +363,67 @@ private fun ReadyScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 2026-05-09: welcome-screen Record button with the engine pre-warm gate.
+ *
+ *  - [EngineState.Ready] (or [EngineState.Idle] on whisper builds, since whisper never warms
+ *    the LiteRT-LM engine) → enabled "Record" button. Fires [onRecord] on tap.
+ *  - [EngineState.Loading] / Idle on a gemma build that's still warming up → disabled
+ *    button labelled "Loading local AI…" with a small inline [CircularProgressIndicator].
+ *    The user can still read everything else on the screen — only this control is gated.
+ *  - [EngineState.Failed] → disabled button labelled "Tap to retry — local AI failed to
+ *    load" with a retry callback that re-runs [BidetSharedLiteRtEngineProvider.ensureReady].
+ *
+ * Note Idle on the whisper build is treated as Ready because the whisper flavor doesn't
+ * route through LiteRT-LM at all — the Application class skips ensureReady() there per
+ * [BidetSharedLiteRtEngineProvider.shouldPrewarmOnAppLaunch]. We can detect that with the
+ * BuildConfig flag at the call site, but routing the decision through the state flow keeps
+ * the welcome screen one expression instead of a per-flavor branch.
+ */
+@Composable
+private fun EngineGatedRecordButton(
+    engineState: EngineState,
+    onRecord: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val isWhisperFlavor = !com.google.ai.edge.gallery.BuildConfig.USE_GEMMA_AUDIO
+    when (engineState) {
+        EngineState.Ready -> Button(onClick = onRecord) { Text("Record") }
+        EngineState.Idle -> {
+            if (isWhisperFlavor) {
+                // Whisper flavor never warms the LiteRT-LM engine — the button works as
+                // before. The state flow stays Idle for the lifetime of the process.
+                Button(onClick = onRecord) { Text("Record") }
+            } else {
+                LoadingRecordButton()
+            }
+        }
+        is EngineState.Loading -> LoadingRecordButton()
+        is EngineState.Failed -> {
+            Button(onClick = onRetry) { Text("Tap to retry — local AI failed to load") }
+        }
+    }
+}
+
+@Composable
+private fun LoadingRecordButton() {
+    Button(
+        onClick = {},
+        enabled = false,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+            )
+            Text("Loading local AI…")
         }
     }
 }
