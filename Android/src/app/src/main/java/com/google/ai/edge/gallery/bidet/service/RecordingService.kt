@@ -109,6 +109,13 @@ class RecordingService : Service() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var paused: Boolean = false
     private var capWatcherJob: Job? = null
+    /**
+     * 2026-05-09: synchronous "startup in flight" flag. Set the moment startRecording() runs
+     * (before the scope.launch that initializes the engine), cleared at the end of
+     * performAsyncStartup. Prevents a rapid double-tap from spawning two concurrent
+     * performAsyncStartup runs while [pipeline] is still null because async init is in flight.
+     */
+    private var startupInFlight: Boolean = false
 
     /**
      * 2026-05-09 (Bug B fix): observable status for the UI.
@@ -195,7 +202,7 @@ class RecordingService : Service() {
 
     /** Begin a new recording session. Safe to call when already recording (no-op). */
     fun startRecording() {
-        if (pipeline != null) return
+        if (pipeline != null || startupInFlight) return
 
         // Phase 4A.1: gate on RECORD_AUDIO. The launcher UI also requests this permission via
         // rememberLauncherForActivityResult, but the user can revoke from Settings while
@@ -210,21 +217,34 @@ class RecordingService : Service() {
             return
         }
 
+        // startForeground must be called within 5s of startForegroundService on Android 12+ (per onStartCommand contract). Gemma engine init exceeds this — start foreground FIRST.
+        startupInFlight = true
+        startupRecorder.recordStartForeground()
+        startForegroundWithStartingPlaceholder()
+
+        scope.launch {
+            try {
+                performAsyncStartup()
+            } finally {
+                startupInFlight = false
+            }
+        }
+    }
+
+    /**
+     * Async tail of [startRecording]. Runs on `scope` so the slow Gemma `initialize()` does
+     * not block the synchronous startForegroundService → startForeground window. On init
+     * failure we tear down the foreground we already promoted; on success we swap the
+     * placeholder notification for the real "Bidet AI is recording" notification and start
+     * the capture pipeline.
+     */
+    private suspend fun performAsyncStartup() {
         val sessionId = UUID.randomUUID().toString()
         val chunkQueue = ChunkQueue()
         val aggregator = TranscriptAggregator()
         // Pick engine per Gradle product flavor (BuildConfig.USE_GEMMA_AUDIO).
         // whisper flavor → WhisperEngine. gemma flavor → GemmaAudioEngine.
-        //
-        // F2.1 fix (2026-05-09): previously the `.also { it.initialize() }` discarded the
-        // boolean return value. When init failed (e.g. the user's APK was assembled without
-        // the bundled Whisper model — exactly the bug that bit Mark on the gemma flavor
-        // build), the audio capture loop still started, every chunk fell through to the
-        // failure-marker path, and the user saw "[chunk N transcription failed]" with no
-        // explanation. The gate below runs initialize() and returns InitFailed if it
-        // returned false; the failure-row insert + native-resource close happen inside
-        // the gate so RecordingService stays focused on Service lifecycle. See
-        // [EngineInitGate] for the testable kernel of this decision.
+        startupRecorder.recordEngineInit()
         val transcriptionEngine = engineFactory(applicationContext)
         when (val outcome = EngineInitGate.tryInit(
             engine = transcriptionEngine,
@@ -237,18 +257,11 @@ class RecordingService : Service() {
                     TAG,
                     "Transcription engine init failed (engine=${outcome.engine}) — refusing to start capture pipeline.",
                 )
-                // Persist the failure row so it shows up in History as a terminal failure
-                // rather than an empty in-progress session that never finalizes.
-                scope.launch {
-                    try {
-                        sessionDao.insert(outcome.failureRow)
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Failed to insert engine_init_failed row: ${t.message}", t)
-                    }
+                try {
+                    sessionDao.insert(outcome.failureRow)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to insert engine_init_failed row: ${t.message}", t)
                 }
-                // Surface to the UI + tear ourselves down. Note we have NOT yet promoted
-                // to foreground (deferred until after init succeeds), so all we need to
-                // do is emit the failure status and stopSelf().
                 _statusFlow.value = Status(
                     isRecording = false,
                     sessionId = null,
@@ -259,16 +272,15 @@ class RecordingService : Service() {
                         reason = ENGINE_INIT_FAILED_NOTE,
                     ),
                 )
-                stopSelf()
+                tearDownForeground()
                 return
             }
             EngineInitGate.Outcome.Ready -> { /* fall through to start the pipeline */ }
         }
-        // Defer foreground promotion until after the engine init succeeds. Promoting before
-        // the bail-out path above would leave the user staring at the "Recording…" notification
-        // for a session that immediately tore itself down. Acquire audio focus only when we're
-        // committing to actually capture audio.
-        startForegroundCompat()
+        // Engine is up — swap the placeholder notification for the real one without
+        // re-promoting (we're already foregrounded). NotificationManager.notify against the
+        // same NOTIFICATION_ID rebinds the live foreground notification.
+        swapToRecordingNotification()
         if (!requestAudioFocus()) {
             Log.w(TAG, "Audio focus denied — proceeding anyway.")
         }
@@ -283,18 +295,10 @@ class RecordingService : Service() {
             chunkQueue = chunkQueue,
             sessionId = sessionId,
         )
-        // F2.1 (2026-05-09): worker.start() now also returns false on a not-ready engine
-        // (defence-in-depth — the gate above already gated on initialize(), but if the
-        // worker is ever wired up directly elsewhere we don't want it to silently spin a
-        // consumer that turns every chunk into a failure marker). On the happy path here
-        // the engine is ready, so this is always true.
         if (!worker.start()) {
             Log.e(TAG, "TranscriptionWorker refused to start — engine reported not ready post-init.")
             try { transcriptionEngine.close() } catch (_: Throwable) {}
-            tearDownForeground()
             abandonAudioFocus()
-            // Don't re-insert a session row — the gate above already covered the
-            // not-ready case. Just emit the banner state.
             _statusFlow.value = Status(
                 isRecording = false,
                 sessionId = null,
@@ -305,6 +309,7 @@ class RecordingService : Service() {
                     reason = ENGINE_INIT_FAILED_NOTE,
                 ),
             )
+            tearDownForeground()
             return
         }
         captureEngine.start()
@@ -317,13 +322,8 @@ class RecordingService : Service() {
             worker = worker,
         )
 
-        // Phase 4A: persist the session so SessionsListScreen can show it immediately and
-        // SessionDetailScreen can restore it later. We insert with empty rawText, then tail
-        // the aggregator and rewrite the row with each new transcript snapshot.
         sessionStartedAtMs = System.currentTimeMillis()
 
-        // Bug B (2026-05-09): emit on the status flow so the UI's collectAsState fires and
-        // re-composes into the recording-active screen.
         _statusFlow.value = Status(
             isRecording = true,
             sessionId = sessionId,
@@ -331,31 +331,21 @@ class RecordingService : Service() {
             pipeline = pipeline,
             engineInitError = null,
         )
-        scope.launch {
-            try {
-                sessionDao.insert(
-                    BidetSession(
-                        sessionId = sessionId,
-                        startedAtMs = sessionStartedAtMs,
-                        endedAtMs = null,
-                        durationSeconds = 0,
-                        rawText = "",
-                        chunkCount = 0,
-                    )
+        try {
+            sessionDao.insert(
+                BidetSession(
+                    sessionId = sessionId,
+                    startedAtMs = sessionStartedAtMs,
+                    endedAtMs = null,
+                    durationSeconds = 0,
+                    rawText = "",
+                    chunkCount = 0,
                 )
-            } catch (t: Throwable) {
-                Log.w(TAG, "BidetSession insert failed: ${t.message}", t)
-            }
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "BidetSession insert failed: ${t.message}", t)
         }
         sessionPersistJob = scope.launch {
-            // Throttle: each emission triggers a single column-targeted UPDATE; aggregator
-            // updates ~once per ~30 sec (chunk emit), so this is cheap. We catch + log;
-            // transient I/O failure shouldn't tear down the recording pipeline.
-            //
-            // Phase 4A.1: previously did `getById → copy(rawText = text) → update(entity)`,
-            // which would clobber any column written concurrently by SessionDetailViewModel
-            // (tab-cache writes against the same sessionId during a re-open). The
-            // column-targeted updateRawText is atomic.
             aggregator.rawFlow.collectLatest { text ->
                 try {
                     sessionDao.updateRawText(sessionId, text)
@@ -365,10 +355,6 @@ class RecordingService : Service() {
             }
         }
 
-        // 2026-05-09: launch the recording-time-cap watcher. Vibrates at WARN_VISUAL_MS,
-        // beeps once per second from WARN_AUDIBLE_START_MS through HARD_CAP_MS, then calls
-        // stopRecording() at HARD_CAP_MS. Cancelled by stopRecording() if the user taps
-        // STOP early — Sink.beepOnce will not fire after cancellation.
         capWatcherJob = capWatcherFactory(this).start(scope, sessionStartedAtMs)
     }
 
@@ -500,6 +486,14 @@ class RecordingService : Service() {
             }
         }
     }
+
+    /**
+     * Test seam for the startForeground-before-engine-init ordering contract. Production
+     * sets a no-op recorder; unit tests inject a recorder that captures the order so a JVM
+     * test can assert startForeground happened before engineInit without booting Android.
+     */
+    @VisibleForTesting
+    internal var startupRecorder: StartupOrderRecorder = StartupOrderRecorder.NoOp
 
     /**
      * F2.1 (2026-05-09): pluggable factory + engine-type classifier. Production keeps the
@@ -653,36 +647,8 @@ class RecordingService : Service() {
 
     // ---------- foreground notification ----------
 
-    private fun startForegroundCompat() {
-        val stopIntent = Intent(this, RecordingService::class.java).setAction(ACTION_STOP)
-        val stopPi = PendingIntent.getService(
-            this, 0, stopIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val openIntent = Intent(this, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        val openPi = PendingIntent.getActivity(
-            this, 0, openIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.bidet_recording_notification_title))
-            .setContentText(getString(R.string.bidet_recording_notification_text))
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setOngoing(true)
-            .setContentIntent(openPi)
-            .addAction(
-                NotificationCompat.Action.Builder(
-                    /* icon */ 0,
-                    getString(R.string.bidet_recording_stop_action),
-                    stopPi,
-                ).build()
-            )
-            // MediaStyle omitted intentionally; would need an extra
-            // androidx.media:media dep for a cosmetic chrome change. Phase 2.
-            .build()
-
+    private fun startForegroundWithStartingPlaceholder() {
+        val notification = buildStartingNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -692,6 +658,57 @@ class RecordingService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun swapToRecordingNotification() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            nm.notify(NOTIFICATION_ID, buildRecordingNotification())
+        } catch (t: Throwable) {
+            Log.w(TAG, "swapToRecordingNotification threw: ${t.message}", t)
+        }
+    }
+
+    @VisibleForTesting
+    internal fun buildStartingNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle(getString(R.string.bidet_recording_starting_title))
+        .setContentText(getString(R.string.bidet_recording_starting_text))
+        .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        .setOngoing(true)
+        .setContentIntent(openMainActivityPendingIntent())
+        .build()
+
+    @VisibleForTesting
+    internal fun buildRecordingNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle(getString(R.string.bidet_recording_notification_title))
+        .setContentText(getString(R.string.bidet_recording_notification_text))
+        .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        .setOngoing(true)
+        .setContentIntent(openMainActivityPendingIntent())
+        .addAction(
+            NotificationCompat.Action.Builder(
+                /* icon */ 0,
+                getString(R.string.bidet_recording_stop_action),
+                stopRecordingPendingIntent(),
+            ).build()
+        )
+        .build()
+
+    private fun stopRecordingPendingIntent(): PendingIntent {
+        val stopIntent = Intent(this, RecordingService::class.java).setAction(ACTION_STOP)
+        return PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    private fun openMainActivityPendingIntent(): PendingIntent {
+        val openIntent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(
+            this, 0, openIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 
     private fun ensureChannel() {
