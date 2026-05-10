@@ -203,14 +203,15 @@ class LiteRtBidetGemmaClient @Inject constructor(
         private const val DEFAULT_TOPP: Float = 0.95f
 
         /**
-         * Total context budget the LiteRT-LM Engine is built with. Sized to hold a typical
-         * RAW dump (~5,000 chars ≈ 1,400 tokens) plus a 2,048-token cleaning output plus
-         * ~700 tokens of system prompt without the per-call prefill+decode budget tripping
-         * the engine's "input token IDs are too long" guard. The gemma-flavor prewarm uses
-         * 16384; we stay at half that to keep KV cache memory bounded on Pixel 8 Pro
-         * (~500 MB additional for E4B at 8192 vs 2048).
+         * Total context budget the LiteRT-LM Engine is built with. Empirically tested on
+         * 2026-05-10 on Pixel 8 Pro / Tensor G3: bumping from 2048 to 8192 to single-shot
+         * longer dumps backfired — the larger KV cache cut per-token decode from ~5 tk/s to
+         * ~2 tk/s on E4B (memory-bandwidth dominated). The 18-min dump took ~12 min per
+         * chunk vs ~3 min at 2048. Net: chunked-at-2048 beats single-shot-at-8192 for any
+         * dump that needs more than ~1500 output tokens, which is essentially all of them.
+         * Reverted to 2048 with the original RawChunker threshold of 2400 chars.
          */
-        private const val ENGINE_CONTEXT_BUDGET: Int = 8192
+        private const val ENGINE_CONTEXT_BUDGET: Int = 2048
     }
 }
 

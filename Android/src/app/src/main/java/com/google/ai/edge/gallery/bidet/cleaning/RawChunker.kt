@@ -102,14 +102,13 @@ object RawChunker {
     }
 
     /**
-     * With the LiteRT-LM Engine now built at 8192-token total context budget (see
-     * [com.google.ai.edge.gallery.bidet.ui.LiteRtBidetGemmaClient]'s ENGINE_CONTEXT_BUDGET),
-     * each call has 8192 - 2048 (single-shot output) - ~700 (system prompt) ≈ 5,400 input
-     * tokens of headroom ≈ 18,000 chars. We chunk at 8,000 chars (~2,300 input tokens) to
-     * single-shot anything up to ~13-min dumps and to keep cushion for the cleaning prompt
-     * itself (which appends the "part N of M" annotation when chunking).
+     * Engine context budget = 2048 tokens (see ENGINE_CONTEXT_BUDGET in LiteRtBidetGemmaClient
+     * for why we don't bump it: bigger KV cache halves per-token decode speed on Tensor G3).
+     * With output cap of 512 per chunk + ~300 token system prompt = ~1,200 tokens of input
+     * headroom ≈ 2,400 chars. Smaller windows decode faster per token; the extra prefill
+     * cost from more windows is much cheaper than the per-token decode penalty of larger KV.
      */
-    const val DEFAULT_MAX_CHARS: Int = 8000
+    const val DEFAULT_MAX_CHARS: Int = 2400
 
     /** Small bridge between windows so cleaning sees the end of the previous thought. */
     const val DEFAULT_OVERLAP_CHARS: Int = 200
