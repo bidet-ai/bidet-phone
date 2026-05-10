@@ -17,7 +17,9 @@
 package com.google.ai.edge.gallery.bidet.ui
 
 import android.content.Context
+import com.google.ai.edge.gallery.bidet.cleaning.ChunkCleaner
 import com.google.ai.edge.gallery.bidet.cleaning.RawChunker
+import java.io.File
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -359,6 +361,24 @@ class SessionDetailViewModel @Inject constructor(
             }
             target.value = TabState.Streaming(partialText = "", tokenCount = 0, tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP)
             try {
+                // Path B (2026-05-10): for RECEPTIVE (Clean for me), check if RecordingService's
+                // ChunkCleaner pre-cleaned every chunk during the live recording. If yes,
+                // stitch from disk and short-circuit — typically <100ms vs minutes for the
+                // on-tap chunked path. Only RECEPTIVE is pre-cleaned in v1.
+                if (axis == SupportAxis.RECEPTIVE) {
+                    val expectedChunks = row?.chunkCount ?: 0
+                    val externalRoot = context.getExternalFilesDir(null)
+                    if (externalRoot != null && expectedChunks > 0) {
+                        val sessionDir = File(externalRoot, "sessions/$sessionId")
+                        val stitched = ChunkCleaner.loadStitched(sessionDir, expectedChunks)
+                        if (stitched != null) {
+                            val now = System.currentTimeMillis()
+                            target.value = TabState.Cached(stitched, now)
+                            sessionDao.updateCleanCached(sessionId, stitched)
+                            return@launch
+                        }
+                    }
+                }
                 val systemPrompt = resolveSystemPrompt(axis)
                 val result = withContext(Dispatchers.Default) {
                     val windows = RawChunker.chunk(raw)

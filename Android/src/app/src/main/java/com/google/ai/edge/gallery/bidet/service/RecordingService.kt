@@ -44,9 +44,13 @@ import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine
 import com.google.ai.edge.gallery.bidet.audio.WavConcatenator
 import com.google.ai.edge.gallery.bidet.chunk.ChunkQueue
+import com.google.ai.edge.gallery.bidet.cleaning.ChunkCleaner
 import com.google.ai.edge.gallery.bidet.data.BidetSession
 import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
+import com.google.ai.edge.gallery.bidet.ui.BidetGemmaClient
+import com.google.ai.edge.gallery.bidet.ui.SupportAxis
+import com.google.ai.edge.gallery.bidet.ui.TabPref
 import com.google.ai.edge.gallery.bidet.transcription.TranscriptionEngine
 import com.google.ai.edge.gallery.bidet.transcription.TranscriptionWorker
 import dagger.hilt.android.AndroidEntryPoint
@@ -85,6 +89,17 @@ import java.util.UUID
 class RecordingService : Service() {
 
     @Inject lateinit var sessionDao: BidetSessionDao
+
+    /**
+     * Path B (2026-05-10): used by the per-chunk pre-cleaner. Optional because the
+     * dependency graph builds successfully even if the LiteRT-LM Gemma backend isn't
+     * present (whisper-only test flavors). When null, [ChunkCleaner] simply isn't started
+     * and Clean for me falls back to the on-tap chunked path.
+     */
+    @Inject lateinit var gemmaClient: BidetGemmaClient
+
+    /** Path B (2026-05-10): per-session pre-cleaner, lifecycle scoped to one recording. */
+    private var chunkCleaner: ChunkCleaner? = null
 
     /**
      * Holder of pipeline objects. Exposed via the [LocalBinder] so the UI can collect from
@@ -289,6 +304,29 @@ class RecordingService : Service() {
         // reference can't drift if a future caller restructures startup flow. Failures
         // inside the lambda are absorbed by the aggregator (logged but not rethrown) so a
         // transient DB write never breaks transcription.
+        // Path B (2026-05-10): per-chunk pre-cleaner. Start it BEFORE creating the
+        // aggregator so the onChunkAppended callback has somewhere to enqueue. If anything
+        // here throws (missing prompt asset, model not ready, external dir unavailable),
+        // log and fall through — the aggregator still works without it, on-tap cleaning is
+        // the existing path.
+        val cleaner: ChunkCleaner? = try {
+            val externalRoot = getExternalFilesDir(null)
+                ?: throw IllegalStateException("getExternalFilesDir returned null")
+            val sessionDir = File(externalRoot, "sessions/$sessionId")
+            sessionDir.mkdirs()
+            val cleanForMePrompt = assets.open(TabPref.defaultPromptAssetPath(SupportAxis.RECEPTIVE))
+                .bufferedReader().use { it.readText() }
+            ChunkCleaner(
+                sessionExternalDir = sessionDir,
+                gemma = gemmaClient,
+                cleanForMePrompt = cleanForMePrompt,
+            ).also { it.start() }
+        } catch (t: Throwable) {
+            Log.w(TAG, "ChunkCleaner init failed; falling back to on-tap clean: ${t.message}", t)
+            null
+        }
+        chunkCleaner = cleaner
+
         val aggregator = TranscriptAggregator(
             onMutation = { text, mergedCount ->
                 sessionDao.updateRawTextAndMergedChunkCount(
@@ -296,6 +334,9 @@ class RecordingService : Service() {
                     text = text,
                     mergedChunkCount = mergedCount,
                 )
+            },
+            onChunkAppended = { idx, chunkText ->
+                cleaner?.enqueue(idx, chunkText)
             },
         )
         // Pick engine per Gradle product flavor (BuildConfig.USE_GEMMA_AUDIO).
@@ -484,6 +525,14 @@ class RecordingService : Service() {
         sessionPersistJob = null
         chunkProducedMirrorJob?.cancel()
         chunkProducedMirrorJob = null
+
+        // Path B (2026-05-10): close the pre-cleaner queue so the worker drains its current
+        // task and exits cleanly. The cleaner owns its own SupervisorJob scope so the
+        // worker continues running even after RecordingService.scope.cancel() — pending
+        // cleanings finish writing to disk; the next App-process death is the only thing
+        // that can interrupt them. The on-tap path handles missing files gracefully.
+        chunkCleaner?.drainAndStop()
+        chunkCleaner = null
 
         // Cap-watcher cancellation MUST run before we clear `pipeline` — the watcher's
         // beep coroutine is what stops mid-cadence when the user taps STOP early
