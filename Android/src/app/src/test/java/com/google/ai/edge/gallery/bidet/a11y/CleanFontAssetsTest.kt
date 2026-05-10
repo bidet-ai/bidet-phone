@@ -145,7 +145,14 @@ class CleanFontAssetsTest {
     // OFL license bundles — required for SIL OFL compliance
     // -------------------------------------------------------------------------------------
 
-    private fun assertOflBundle(thirdPartyName: String, expectedAttribution: String) {
+    /**
+     * Assert that an OFL bundle is present and looks like a real SIL OFL license file. We accept
+     * any of [acceptableAttributions] in the body — the upstream OFL.txt files vary on whether
+     * they include the Reserved Font Name vs. only the foundry's copyright (Atkinson's upstream
+     * OFL.txt only names the Braille Institute, for instance), so we look for any signal that
+     * uniquely identifies the right font family's license file.
+     */
+    private fun assertOflBundle(thirdPartyName: String, vararg acceptableAttributions: String) {
         val dir = thirdPartyDir(thirdPartyName)
         val ofl = File(dir, "OFL.txt")
         assertNotNull("OFL.txt missing for third_party/$thirdPartyName", ofl)
@@ -154,9 +161,12 @@ class CleanFontAssetsTest {
             ofl.isFile,
         )
         val text = ofl.readText()
+        val matched = acceptableAttributions.any { text.contains(it, ignoreCase = true) }
         assertTrue(
-            "third_party/$thirdPartyName/OFL.txt missing '$expectedAttribution' attribution",
-            text.contains(expectedAttribution, ignoreCase = true),
+            "third_party/$thirdPartyName/OFL.txt does not contain any of " +
+                acceptableAttributions.joinToString { "'$it'" } +
+                " — license bundle may be wrong file",
+            matched,
         )
         assertTrue(
             "third_party/$thirdPartyName/OFL.txt missing SIL Open Font License header",
@@ -165,7 +175,8 @@ class CleanFontAssetsTest {
     }
 
     @Test fun atkinson_oflLicense_isBundled() {
-        assertOflBundle("atkinson_hyperlegible", "Atkinson Hyperlegible")
+        // Upstream Atkinson OFL.txt names only the Braille Institute on the copyright line.
+        assertOflBundle("atkinson_hyperlegible", "Atkinson Hyperlegible", "Braille Institute")
     }
 
     @Test fun openDyslexic_oflLicense_isBundled() {
@@ -173,6 +184,7 @@ class CleanFontAssetsTest {
     }
 
     @Test fun andika_oflLicense_isBundled() {
+        // Andika's OFL names "Andika" (and "SIL") on the Reserved Font Name line.
         assertOflBundle("andika", "Andika")
     }
 
