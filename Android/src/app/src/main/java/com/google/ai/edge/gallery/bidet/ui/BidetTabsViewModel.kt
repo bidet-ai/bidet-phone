@@ -436,10 +436,19 @@ class BidetTabsViewModel @Inject constructor(
         // Bumping these strings invalidates cached generations. Bump when the resolver layer
         // changes shape. The promptHash component of the cache key absorbs day-to-day
         // preset / custom-prompt edits.
-        const val PROMPT_VERSION_RECEPTIVE: String = "v1"
-        const val PROMPT_VERSION_EXPRESSIVE: String = "v1"
+        // Bumped to v2 (2026-05-09): Clean-tab default prompts rewritten for fidelity-first
+        // behavior — Gemma 4 E4B was hallucinating proper nouns ("Hasspin", "Zenabria") not
+        // present in the RAW transcript. New rules forbid invention and require verbatim
+        // preservation of names/numbers. See fix/clean-tab-prompt-fidelity.
+        const val PROMPT_VERSION_RECEPTIVE: String = "v2"
+        const val PROMPT_VERSION_EXPRESSIVE: String = "v2"
 
-        const val DEFAULT_TEMPERATURE: Float = 0.4f
+        // Lowered from 0.4f → 0.3f (2026-05-09) alongside the v2 fidelity prompts. Lower
+        // temperature reduces the model's tendency to invent plausible-sounding words —
+        // exactly the failure mode that produced the hallucinated names. The Gemma-audio
+        // path's much lower 0.05 temperature (set by PR #23 for transcription accuracy) is
+        // unrelated and untouched.
+        const val DEFAULT_TEMPERATURE: Float = 0.3f
 
         // On-device Gemma 4 generation runs at ~10 tk/s on a Pixel 8 Pro, so 2048 tokens
         // ≈ 3-4 minutes wall-clock — the upper bound users will tolerate before feedback.
