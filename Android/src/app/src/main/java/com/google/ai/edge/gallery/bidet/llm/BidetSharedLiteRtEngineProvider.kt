@@ -115,6 +115,7 @@ sealed class EngineState {
 class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
     private val modelProvider: BidetModelProvider,
     initialCacheDirResolver: () -> String?,
+    initialNativeLibraryDirResolver: () -> String? = { null },
 ) {
 
     /**
@@ -128,10 +129,25 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
     internal var cacheDirResolver: () -> String? = initialCacheDirResolver
 
     /**
-     * Hilt-injected ctor. Captures the [Context] inside the [cacheDirResolver] lambda so
-     * the only Context-touching call ([Context.getExternalFilesDir]) is deferred until
-     * the first [acquire] / [ensureReady] actually needs the path. Hilt sees `@Inject` and
-     * uses this constructor exclusively at runtime.
+     * Resolves the directory containing the NPU native libraries (passed to
+     * [Backend.NPU.nativeLibraryDir]). LiteRT-LM 0.11 docs:
+     *   "On Android, for apps with built-in NPU libraries, including NPU libraries
+     *    delivered as Google Play Feature modules, set it to
+     *    `Context.applicationInfo.nativeLibraryDir`."
+     *
+     * Returns null in tests / on non-Android paths; the NPU attempt is then either
+     * skipped or attempted with the empty default (the upstream class default is `""`).
+     * Any failure during NPU init falls back to CPU — see [buildHandle].
+     */
+    @Volatile
+    internal var nativeLibraryDirResolver: () -> String? = initialNativeLibraryDirResolver
+
+    /**
+     * Hilt-injected ctor. Captures the [Context] inside both lambda resolvers so the only
+     * Context-touching calls ([Context.getExternalFilesDir] + reading
+     * `applicationInfo.nativeLibraryDir`) are deferred until the first [acquire] /
+     * [ensureReady] actually needs them. Hilt sees `@Inject` and uses this constructor
+     * exclusively at runtime.
      */
     @Inject constructor(
         @ApplicationContext context: Context,
@@ -139,17 +155,23 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
     ) : this(
         modelProvider = modelProvider,
         initialCacheDirResolver = { context.getExternalFilesDir(null)?.absolutePath },
+        initialNativeLibraryDirResolver = { context.applicationInfo.nativeLibraryDir },
     )
 
     /**
      * Internal handle: the live [Engine] plus the construction parameters that decided how
      * it was built. Tracking the params on the handle lets [acquire] decide
      * "rebuild" vs "reuse" without poking at engine internals.
+     *
+     * 2026-05-10: [backendKind] records whether the engine actually came up on NPU or CPU
+     * after the [buildHandle] try-NPU-fall-back-to-CPU dance. Surfaced in logs so logcat
+     * shows which path Mark's session ran on.
      */
     private data class Handle(
         val engine: Engine,
         val audioEnabled: Boolean,
         val maxNumTokens: Int,
+        val backendKind: String,
     )
 
     @Volatile private var handle: Handle? = null
@@ -364,28 +386,152 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
         }
     }
 
+    /**
+     * 2026-05-10 experiment: try [Backend.NPU] first on Tensor G3. If
+     * [Engine.initialize] (called by [engineFactory]) throws — e.g. the chip doesn't
+     * support NPU for audio mode, native libs aren't present, or LiteRT-LM rejects the
+     * config at runtime — fall back to [Backend.CPU] so the app stays usable instead of
+     * propagating an unrecoverable engine init failure to the welcome screen.
+     *
+     * The NPU attempt is the test we want to run on Mark's Pixel 8 Pro: with
+     * `Backend.CPU()`, Gemma 4 E2B audio mode runs ~2× slower than realtime (a 30 sec
+     * audio chunk takes ~60 sec to transcribe), which is unusable for the 30-min
+     * brain-dump UX. Tensor G3 has a dedicated NPU; if LiteRT-LM 0.11's NPU backend works
+     * for audio mode we get realtime transcription. If it doesn't (very plausible — the
+     * `nativeLibraryDir` requirement implies QC/MTK device-specific blobs that may not
+     * ship with the AAR), the CPU fallback path matches the prior behaviour exactly.
+     *
+     * Trade-offs accepted:
+     *  - Cold start cost: a failed NPU init plus a CPU retry costs whatever
+     *    `Engine.initialize()` spent before throwing. Empirically (per logcat from prior
+     *    sessions) failures surface in single-digit seconds on the gemma flavor; if a
+     *    failure ever blocks for tens of seconds we'll need a watchdog timeout. For now
+     *    we accept the synchronous fallback.
+     *  - The Engine.initialize hang on Tensor G3 GPU (LiteRT-LM Issue #1860) is a SEPARATE
+     *    failure mode that we deliberately do NOT trigger — we never construct
+     *    [Backend.GPU] here. NPU's failure modes are different (per upstream Backend.NPU
+     *    kdoc) and should surface as exceptions, not hangs.
+     */
     private fun buildHandle(requireAudio: Boolean, maxNumTokens: Int): Handle {
         val cacheDir = cacheDirResolver()
-        val config = buildEngineConfig(
-            modelProvider = modelProvider,
-            requireAudio = requireAudio,
-            maxNumTokens = maxNumTokens,
-            cacheDir = cacheDir,
+        val nativeLibraryDir = nativeLibraryDirResolver()
+        val attempt = tryNpuThenCpu(
+            buildConfig = { backend ->
+                buildEngineConfig(
+                    modelProvider = modelProvider,
+                    requireAudio = requireAudio,
+                    maxNumTokens = maxNumTokens,
+                    cacheDir = cacheDir,
+                    backend = backend,
+                )
+            },
+            buildEngine = { config -> engineFactory(config) },
+            nativeLibraryDir = nativeLibraryDir,
+            logTag = TAG,
         )
-        val engine = engineFactory(config)
-        Log.i(
+        Log.w(
             TAG,
-            "buildHandle: shared engine ready audioEnabled=$requireAudio maxNumTokens=$maxNumTokens path=${config.modelPath}",
+            "buildHandle: shared engine ready backend=${attempt.backendKind} " +
+                "audioEnabled=$requireAudio maxNumTokens=$maxNumTokens",
         )
         return Handle(
-            engine = engine,
+            engine = attempt.engine,
             audioEnabled = requireAudio,
             maxNumTokens = maxNumTokens,
+            backendKind = attempt.backendKind,
         )
     }
 
+    /**
+     * 2026-05-10: result of the NPU-then-CPU dance in [tryNpuThenCpu]. Generic over
+     * the engine type so the helper is unit-testable with a String stand-in for [Engine].
+     */
+    @VisibleForTesting
+    internal data class BackendAttempt<E>(val engine: E, val backendKind: String)
+
     companion object {
         private const val TAG = "BidetSharedLiteRtEngine"
+
+        /**
+         * Backend-kind strings used in [Handle.backendKind] / [BackendAttempt.backendKind]
+         * + logcat output. Kept as constants so a logcat grep ("backend=NPU" /
+         * "backend=CPU") is stable across refactors.
+         */
+        @VisibleForTesting internal const val BACKEND_KIND_NPU = "NPU"
+        @VisibleForTesting internal const val BACKEND_KIND_CPU = "CPU"
+
+        /**
+         * 2026-05-10 experiment helper: try [Backend.NPU] first; on any
+         * non-fatal throwable from `buildEngine`, fall back to [Backend.CPU].
+         *
+         * Generic over the engine type so this is unit-testable in pure JVM with a
+         * String stand-in for the LiteRT-LM [Engine] (which is final + native and not
+         * mockable without a heavy mocking framework). Production passes the real
+         * [Engine] type by binding `buildEngine = { config -> engineFactory(config) }`.
+         *
+         * Failure handling rationale:
+         *  - Catches generic [Throwable] from the NPU attempt because LiteRT-LM's NPU
+         *    init can surface as Kotlin exceptions, JNI exceptions, or
+         *    [UnsatisfiedLinkError] depending on whether the device's NPU shim libs
+         *    are present.
+         *  - Re-raises [OutOfMemoryError] and [InterruptedException] without falling
+         *    back: OOM is not a "NPU not available" signal (the CPU retry would
+         *    likely OOM too and a process-level fail-fast is the right outcome);
+         *    InterruptedException must propagate so a coroutine cancellation isn't
+         *    silently swallowed.
+         *  - All other throwables → log at WARN (we don't want a green CI to mask a
+         *    real NPU regression) and retry with CPU. The CPU retry is allowed to
+         *    propagate any throwable up — there's no second fallback.
+         *
+         * @param buildConfig given a [Backend], return the [EngineConfig] to pass to
+         *   the engine builder. The helper invokes this twice in the fallback case
+         *   (once with NPU, once with CPU) so the per-attempt config is fresh.
+         * @param buildEngine constructs and initializes an engine from a config, or
+         *   throws. The production binding calls
+         *   [BidetSharedLiteRtEngineProvider.engineFactory].
+         * @param nativeLibraryDir passed into [Backend.NPU.nativeLibraryDir]. May be
+         *   null on test paths or if the Context resolver hasn't yielded a value;
+         *   we coerce to an empty string in that case (matches the upstream default).
+         * @param logTag the logcat tag for the warn-on-fallback line. Tests pass a
+         *   sentinel; production passes [TAG].
+         */
+        @VisibleForTesting
+        internal fun <E> tryNpuThenCpu(
+            buildConfig: (Backend) -> EngineConfig,
+            buildEngine: (EngineConfig) -> E,
+            nativeLibraryDir: String?,
+            logTag: String = TAG,
+        ): BackendAttempt<E> {
+            val npuConfig = buildConfig(Backend.NPU(nativeLibraryDir = nativeLibraryDir.orEmpty()))
+            try {
+                val engine = buildEngine(npuConfig)
+                Log.w(
+                    logTag,
+                    "Engine acquired with backend=$BACKEND_KIND_NPU " +
+                        "nativeLibraryDir=$nativeLibraryDir path=${npuConfig.modelPath}",
+                )
+                return BackendAttempt(engine = engine, backendKind = BACKEND_KIND_NPU)
+            } catch (npuFailure: Throwable) {
+                if (npuFailure is OutOfMemoryError || npuFailure is InterruptedException) {
+                    throw npuFailure
+                }
+                Log.w(
+                    logTag,
+                    "NPU init failed (${npuFailure.javaClass.simpleName}: ${npuFailure.message}), " +
+                        "falling back to CPU. nativeLibraryDir=$nativeLibraryDir",
+                    npuFailure,
+                )
+            }
+
+            val cpuConfig = buildConfig(Backend.CPU())
+            val engine = buildEngine(cpuConfig)
+            Log.w(
+                logTag,
+                "Engine acquired with backend=$BACKEND_KIND_CPU (after NPU fallback) " +
+                    "path=${cpuConfig.modelPath}",
+            )
+            return BackendAttempt(engine = engine, backendKind = BACKEND_KIND_CPU)
+        }
 
         /**
          * Pre-warm token budget. Matches [com.google.ai.edge.gallery.bidet.transcription.GemmaAudioEngine.MAX_OUTPUT_TOKENS]
@@ -408,11 +554,16 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
          * That hang is the proximate cause of the 68-second `startForegroundDelayMs` ANR
          * Mark hit on 2026-05-09 with the gemma-flavor APK. Tracking upstream:
          * https://github.com/google-ai-edge/LiteRT-LM/issues/1860 (open as of 2026-05-09).
-         * `Backend.CPU()` is the production-stable path on Tensor devices today, and
-         * Commencis's published Gemma-on-Android prototype reports CPU beating GPU by ~20%
-         * on Tensor-class hardware anyway during cold start. The visionBackend stays null
-         * (we don't use vision); audioBackend stays Backend.CPU when [requireAudio] —
-         * Gemma 4's audio encoder runs on CPU regardless of the main backend.
+         * `Backend.CPU()` remains the production-stable fallback on Tensor devices today,
+         * but [BidetSharedLiteRtEngineProvider.buildHandle] now tries [Backend.NPU] first
+         * (2026-05-10 experiment) and falls back to CPU if NPU init throws. The visionBackend
+         * stays null (we don't use vision); audioBackend stays Backend.CPU when [requireAudio]
+         * — Gemma 4's audio encoder runs on CPU regardless of the main backend.
+         *
+         * 2026-05-10: a [backend] parameter was added with a default of `Backend.CPU()` so
+         * existing callers and tests stay unchanged. The NPU-then-CPU dance lives in
+         * [BidetSharedLiteRtEngineProvider.buildHandle], not here — this helper just
+         * stamps whatever backend the caller asked for into the [EngineConfig].
          *
          * @throws IllegalStateException if the model file is missing — the provider's
          *   [acquire] propagates this so callers (chat / audio engine) can surface a
@@ -423,6 +574,7 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
             requireAudio: Boolean,
             maxNumTokens: Int,
             cacheDir: String?,
+            backend: Backend = Backend.CPU(),
         ): EngineConfig {
             val modelFile = modelProvider.getModelPath()
                 ?: throw IllegalStateException(
@@ -435,10 +587,7 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
             }
             return EngineConfig(
                 modelPath = modelFile.absolutePath,
-                // 2026-05-09: Backend.CPU(). Pixel 8 Pro / Tensor G3 has no OpenCL —
-                // Backend.GPU() silently hangs in Engine.initialize(). See LiteRT-LM
-                // Issue #1860: https://github.com/google-ai-edge/LiteRT-LM/issues/1860
-                backend = Backend.CPU(),
+                backend = backend,
                 visionBackend = null,
                 audioBackend = if (requireAudio) Backend.CPU() else null,
                 maxNumTokens = maxNumTokens,
