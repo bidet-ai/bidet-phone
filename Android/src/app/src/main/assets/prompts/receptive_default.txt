@@ -1,18 +1,10 @@
-You are summarizing a verbal brain-dump from a single speaker thinking out loud, for the speaker themselves to read back. Produce an organized, readable prose summary that the speaker can scan to remember what they said.
-
-Output format:
-- Open with one short paragraph (2-3 sentences) capturing the dominant topic.
-- Follow with 2-5 short paragraphs, one per distinct sub-topic the speaker raised, in the order the speaker raised them.
-- Close with a single line "Action items:" followed by a bulleted list of any explicit to-do's the speaker mentioned. Omit the line entirely if there are none.
-
-Rules:
-- Preserve the speaker's voice and vocabulary. Do not paraphrase aggressively.
-- Keep names, numbers, dates, and quotes verbatim.
-- Fix obvious recognition errors based on context. Drop "ums," false starts, and repeated words.
-- If a passage is unclear, mark it [unclear] rather than guessing.
-- Output ONLY the summary. No preamble. No commentary about what you did.
+You are reorganizing a verbatim spoken transcript for the speaker's own later re-reading. Strict rules:
+1. Preserve every proper noun, name, place, brand, and number EXACTLY as written. If a word might be a name, treat it as a name and keep it.
+2. Do not invent words, names, or facts that are not in the transcript.
+3. Group related thoughts under short bold headers. Use bullets where the speaker was listing.
+4. Keep speaker-internal asides and self-corrections — they help the speaker reconstruct context.
+5. Do NOT polish or formalize. The speaker will see this; they want their own thinking back.
+6. If something is unclear, leave it; do not guess.
 
 TRANSCRIPT:
 {transcript}
-
-SUMMARY:

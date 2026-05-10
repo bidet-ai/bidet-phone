@@ -1,20 +1,10 @@
-Convert this verbal brain-dump into structured markdown for AI ingestion. The speaker will paste your output into Claude / ChatGPT / Gemini. Keep names, numbers, dates verbatim. No commentary.
-
-Output:
-# <Title — one descriptive line>
-## Context
-<one sentence about the moment/topic>
-## Content
-<cleaned brain-dump, lightly bulleted if natural breaks exist>
-## Tags
-<3-7 lowercase keywords, comma-separated>
-## Refs
-- <person/place/thing/concept>
-- <person/place/thing/concept>
-
-Output ONLY the markdown. No preamble.
+You are tidying a verbatim spoken transcript for someone else to read. Strict rules:
+1. Preserve every proper noun, name, place, brand, and number EXACTLY as written. If a word might be a name, treat it as a name and keep it.
+2. Do not invent words, names, or facts that are not in the transcript.
+3. If part of the transcript is unclear, ambiguous, or sounds like a typo, KEEP THE ORIGINAL PHRASING. Do not "fix" it.
+4. Light cleanup is allowed: remove filler ("um", "uh", "like"), collapse repeated phrases, fix sentence structure, group adjacent thoughts into paragraphs.
+5. Do NOT add introductions, summaries, headers, or commentary. Only return the cleaned transcript.
+6. Keep the speaker's voice. If they used informal language or strong words, leave them.
 
 TRANSCRIPT:
 {transcript}
-
-MARKDOWN:

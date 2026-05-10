@@ -42,7 +42,9 @@ interface BidetGemmaClient {
      *   The 1024 default was the upstream Gallery value and choked on real RAW inputs over
      *   ~1 minute (LiteRT-LM error: "input token IDs are too long … 1064 ≥ 1024"). Gemma 4
      *   E4B's context window is 128k so 16384 is still conservative.
-     * @param temperature sampling temperature; defaults to the prompt-locked value of 0.4.
+     * @param temperature sampling temperature; defaults to the prompt-locked value of 0.3
+     *   (lowered from 0.4 on 2026-05-09 to suppress on-device Gemma 4 E4B's tendency to
+     *   invent plausible-sounding proper nouns that were never in the RAW transcript).
      * @return the model's response text.
      * @throws Exception any inference-side error. Caller surfaces via Cached(text) → toast or
      *   fallback message on the tab.
@@ -51,7 +53,7 @@ interface BidetGemmaClient {
         systemPrompt: String,
         userPrompt: String,
         maxOutputTokens: Int = 16384,
-        temperature: Float = 0.4f,
+        temperature: Float = 0.3f,
     ): String
 
     /**
@@ -67,7 +69,7 @@ interface BidetGemmaClient {
         systemPrompt: String,
         userPrompt: String,
         maxOutputTokens: Int = 16384,
-        temperature: Float = 0.4f,
+        temperature: Float = 0.3f,
         onChunk: (cumulativeText: String, chunkIndex: Int) -> Unit,
     ): String
 }
