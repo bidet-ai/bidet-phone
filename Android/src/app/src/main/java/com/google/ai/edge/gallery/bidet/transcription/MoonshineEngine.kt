@@ -92,6 +92,24 @@ class MoonshineEngine(private val context: Context) : TranscriptionEngine {
      * Transcribe one audio chunk. Float32 mono [-1.0, 1.0], must be 16 kHz (Moonshine's
      * native rate; passing anything else would silently mis-transcribe so we throw instead).
      *
+     * Internally splits the input into ≤ [MAX_SUBCHUNK_SAMPLES] sub-chunks before handing
+     * each one to sherpa-onnx. The Moonshine **quantized** ONNX models bake the encoder
+     * attention shapes into the int8 graph at export time; feeding a waveform longer than
+     * roughly 9 seconds at 16 kHz triggers a runtime broadcast error inside the encoder
+     * (`Add` node along the cross-attention axis) and sherpa-onnx's V2 impl swallows the
+     * exception and returns an empty result. See:
+     *   https://k2-fsa.github.io/sherpa/onnx/moonshine/   (model docs)
+     *   https://zenn.dev/tubome/articles/moonshine-sherpa-onnx-japanese
+     *     (empirical: 9.9 s fails, 9.0 s marginal, 8.5 s safe; recommends 8.5 s hard cap +
+     *     ~0.9 s overlap stitching for long-form audio)
+     *
+     * The upstream [com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine] emits 30-second
+     * windows because that's what Whisper/Gemma want — keeping the caller-side contract
+     * unchanged means the splitting has to happen here. We use 8.0-second sub-chunks with
+     * 0.5-second overlap and stitch the results with a single space; the overlap is enough
+     * to keep word boundaries from getting cut mid-syllable while the cleaning pass
+     * (Tab1/Tab2 prompts) handles the "the the" duplicate at the seam.
+     *
      * @return the transcribed text, trimmed.
      * @throws IllegalStateException if [initialize] has not succeeded.
      * @throws IllegalArgumentException if [sampleRateHz] != 16000.
@@ -103,19 +121,32 @@ class MoonshineEngine(private val context: Context) : TranscriptionEngine {
         val recognizer = recognizerRef.get()
             ?: throw IllegalStateException("MoonshineEngine not initialized")
 
+        if (floatPcm.isEmpty()) return ""
+
         // Decode is synchronous in sherpa-onnx Kotlin bindings — push it to Default dispatcher
         // and serialize against concurrent transcribe() calls. (TranscriptionWorker is already
         // a single consumer, but the Mutex is cheap defense in depth.)
         return mutex.withLock {
             withContext(Dispatchers.Default) {
-                val stream = recognizer.createStream()
-                try {
-                    stream.acceptWaveform(floatPcm, sampleRateHz)
-                    recognizer.decode(stream)
-                    recognizer.getResult(stream).text.trim()
-                } finally {
-                    stream.release()
+                val windows = splitForQuantizedEncoder(floatPcm)
+                Log.d(
+                    TAG,
+                    "transcribe: ${floatPcm.size} samples → ${windows.size} sub-chunk(s) " +
+                        "(cap=${MAX_SUBCHUNK_SAMPLES}, overlap=${OVERLAP_SAMPLES})",
+                )
+                val parts = ArrayList<String>(windows.size)
+                for (window in windows) {
+                    val stream = recognizer.createStream()
+                    try {
+                        stream.acceptWaveform(window, sampleRateHz)
+                        recognizer.decode(stream)
+                        val text = recognizer.getResult(stream).text.trim()
+                        if (text.isNotEmpty()) parts += text
+                    } finally {
+                        stream.release()
+                    }
                 }
+                parts.joinToString(separator = " ").trim()
             }
         }
     }
@@ -160,5 +191,44 @@ class MoonshineEngine(private val context: Context) : TranscriptionEngine {
     companion object {
         private const val TAG = "BidetMoonshineEngine"
         const val ASSETS_DIR: String = "moonshine"
+
+        /**
+         * Per-sub-chunk sample cap for the quantized Moonshine ONNX encoder. 8.0 s @ 16 kHz =
+         * 128 000 samples; sits comfortably under the empirical ~9 s breakpoint where the
+         * baked-in cross-attention dimensions overflow. See [transcribe] for the citation
+         * trail.
+         */
+        const val MAX_SUBCHUNK_SAMPLES: Int = 16_000 * 8
+
+        /**
+         * Overlap between adjacent sub-chunks so that a word straddling the split-point
+         * still has continuous acoustic context on at least one side. 0.5 s @ 16 kHz =
+         * 8 000 samples; the duplicate text at the seam (a few words) is cleaned out by
+         * the downstream Tab1/Tab2 LLM prompts which collapse consecutive duplicates.
+         */
+        const val OVERLAP_SAMPLES: Int = 16_000 / 2
+
+        /**
+         * Split [floatPcm] into ≤ [MAX_SUBCHUNK_SAMPLES] windows with [OVERLAP_SAMPLES]
+         * overlap between adjacent windows. The final window may be shorter than the cap
+         * (it's just whatever's left). Returns the input unchanged in a single-element list
+         * if it already fits the cap — no allocation in the common short-clip case.
+         *
+         * Visible to tests in the same package via `internal`.
+         */
+        @JvmStatic
+        internal fun splitForQuantizedEncoder(floatPcm: FloatArray): List<FloatArray> {
+            if (floatPcm.size <= MAX_SUBCHUNK_SAMPLES) return listOf(floatPcm)
+            val stride = MAX_SUBCHUNK_SAMPLES - OVERLAP_SAMPLES
+            val out = ArrayList<FloatArray>()
+            var start = 0
+            while (start < floatPcm.size) {
+                val end = minOf(start + MAX_SUBCHUNK_SAMPLES, floatPcm.size)
+                out += floatPcm.copyOfRange(start, end)
+                if (end == floatPcm.size) break
+                start += stride
+            }
+            return out
+        }
     }
 }
