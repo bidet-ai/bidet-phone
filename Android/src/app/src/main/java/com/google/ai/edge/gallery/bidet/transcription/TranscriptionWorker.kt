@@ -79,13 +79,14 @@ class TranscriptionWorker(
             // Merge the audio flow with the markers flow so dropped chunks also get a marker.
             val merged = merge(chunkQueue.asFlow(), chunkQueue.markersFlow())
             merged.collect { chunk ->
+                Log.w(TAG, "collect RECEIVED chunk type=${chunk::class.simpleName} idx=${chunk.idx}")
                 try {
                     when (chunk) {
                         is Chunk.Audio -> handleAudio(chunk)
                         is Chunk.MarkerLost -> aggregator.appendFailureMarker(chunk.idx)
                     }
                 } catch (t: Throwable) {
-                    Log.w(TAG, "chunk ${chunk.idx} failed: ${t.message}", t)
+                    Log.w(TAG, "chunk idx=${chunk.idx} EXCEPTION in handler: ${t.message}", t)
                     aggregator.appendFailureMarker(chunk.idx)
                 } finally {
                     chunkQueue.acknowledgeProcessed()
@@ -151,6 +152,7 @@ class TranscriptionWorker(
     }
 
     private suspend fun handleAudio(chunk: Chunk.Audio) {
+        Log.w(TAG, "handleAudio ENTER idx=${chunk.idx} bytes=${chunk.bytes.size}")
         // 2026-05-09: wrap in NonCancellable so that when the user taps Stop, an
         // already-in-flight whisper_full call (which can take a few seconds even
         // optimized) gets to finish and write its result to the aggregator/DB.
@@ -164,9 +166,15 @@ class TranscriptionWorker(
             val floatPcm = transcriptionEngine.int16ToFloat32(chunk.bytes)
             transcriptionEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
         }
+        Log.w(
+            TAG,
+            "handleAudio TRANSCRIBE_DONE idx=${chunk.idx} textLen=${text.length} " +
+                "preview='${text.take(40).replace("\n", " ")}'",
+        )
         withContext(NonCancellable) {
             aggregator.append(idx = chunk.idx, startMs = chunk.startMs, text = text)
         }
+        Log.w(TAG, "handleAudio AGGREGATED idx=${chunk.idx}")
     }
 
     companion object {
