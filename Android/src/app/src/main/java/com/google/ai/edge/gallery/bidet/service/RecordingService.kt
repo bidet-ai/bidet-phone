@@ -59,6 +59,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -127,6 +128,11 @@ class RecordingService : Service() {
      *
      * `statusFlow` emits whenever startRecording / stopRecording flips state. The
      * `startedAtMs` field drives the live timer in the recording header.
+     *
+     * Bug-2 fix (2026-05-10): adds [drainProgress]. After [stopRecording] the FGS keeps
+     * running until the worker drains; during that window `isRecording` is false (so the
+     * UI flips back to the welcome screen) but [drainProgress] is non-null so the
+     * notification + History indicator can still show "Transcribing N of M chunks…".
      */
     data class Status(
         val isRecording: Boolean,
@@ -141,6 +147,26 @@ class RecordingService : Service() {
          * "[chunk N transcription failed]" cascade that bit Mark on the flavor APKs.
          */
         val engineInitError: EngineInitError? = null,
+        /**
+         * Bug-2 fix (2026-05-10): non-null while the FGS is in the post-stop drain phase
+         * (worker still chewing through queued chunks after the user tapped Stop). Cleared
+         * when the worker queue is empty and finalize has run. Drives the notification
+         * "Transcribing N of M chunks remaining…" + the History row + SessionDetail banner.
+         */
+        val drainProgress: DrainProgress? = null,
+    )
+
+    /**
+     * Bug-2 fix (2026-05-10): current state of the post-stop drain. [sessionId] is the
+     * session being drained so the History UI can correlate. [merged] / [produced] feed
+     * the "N of M" text. [completed] flips true once finalize has run; the FGS reads it
+     * to decide when to tear down + post the completion notification.
+     */
+    data class DrainProgress(
+        val sessionId: String,
+        val merged: Int,
+        val produced: Int,
+        val completed: Boolean,
     )
 
     /**
@@ -157,7 +183,7 @@ class RecordingService : Service() {
 
     enum class EngineType { Whisper, Gemma }
 
-    private val _statusFlow = MutableStateFlow(Status(false, null, 0L, null, null))
+    private val _statusFlow = MutableStateFlow(Status(false, null, 0L, null, null, null))
     val statusFlow: StateFlow<Status> = _statusFlow.asStateFlow()
 
     /**
@@ -170,6 +196,23 @@ class RecordingService : Service() {
      */
     private var sessionStartedAtMs: Long = 0L
     private var sessionPersistJob: Job? = null
+
+    /**
+     * Bug-3 fix (2026-05-10): mirrors AudioCaptureEngine.producedChunkCountFlow onto
+     * BidetSession.chunkCount so the History UI's "Transcribing N of M…" indicator has the
+     * denominator. Lifecycle is identical to [sessionPersistJob].
+     */
+    private var chunkProducedMirrorJob: Job? = null
+
+    /**
+     * Bug-2 fix (2026-05-10): the post-stop drain coroutine. Spawned by [stopRecording],
+     * keeps the foreground service alive until the worker has processed every queued chunk
+     * AND finalize has run. Cancelling it (e.g. during onDestroy under memory pressure) is
+     * fine — the FGS will tear down on the same path; the only loss is the on-disk audio
+     * chunks that were never transcribed get lost. The session row's mergedChunkCount /
+     * chunkCount tells you exactly how much was salvaged.
+     */
+    private var drainJob: Job? = null
 
     /** Visible to bound clients (the UI). May be null before [startRecording] is called. */
     fun pipeline(): Pipeline? = pipeline
@@ -241,7 +284,20 @@ class RecordingService : Service() {
     private suspend fun performAsyncStartup() {
         val sessionId = UUID.randomUUID().toString()
         val chunkQueue = ChunkQueue()
-        val aggregator = TranscriptAggregator()
+        // Bug-1 fix (2026-05-10): the aggregator persists synchronously inside its own
+        // mutex via this onMutation callback. We bind sessionId by closure so a captured
+        // reference can't drift if a future caller restructures startup flow. Failures
+        // inside the lambda are absorbed by the aggregator (logged but not rethrown) so a
+        // transient DB write never breaks transcription.
+        val aggregator = TranscriptAggregator(
+            onMutation = { text, mergedCount ->
+                sessionDao.updateRawTextAndMergedChunkCount(
+                    sessionId = sessionId,
+                    text = text,
+                    mergedChunkCount = mergedCount,
+                )
+            },
+        )
         // Pick engine per Gradle product flavor (BuildConfig.USE_GEMMA_AUDIO).
         // whisper flavor → WhisperEngine. gemma flavor → GemmaAudioEngine.
         startupRecorder.recordEngineInit()
@@ -271,6 +327,7 @@ class RecordingService : Service() {
                         engine = outcome.engine,
                         reason = ENGINE_INIT_FAILED_NOTE,
                     ),
+                    drainProgress = null,
                 )
                 tearDownForeground()
                 return
@@ -308,6 +365,7 @@ class RecordingService : Service() {
                     engine = engineTypeOf(transcriptionEngine),
                     reason = ENGINE_INIT_FAILED_NOTE,
                 ),
+                drainProgress = null,
             )
             tearDownForeground()
             return
@@ -330,6 +388,7 @@ class RecordingService : Service() {
             startedAtMs = sessionStartedAtMs,
             pipeline = pipeline,
             engineInitError = null,
+            drainProgress = null,
         )
         try {
             sessionDao.insert(
@@ -340,17 +399,38 @@ class RecordingService : Service() {
                     durationSeconds = 0,
                     rawText = "",
                     chunkCount = 0,
+                    mergedChunkCount = 0,
                 )
             )
         } catch (t: Throwable) {
             Log.w(TAG, "BidetSession insert failed: ${t.message}", t)
         }
+        // Bug-1 fix (2026-05-10): per-merge persistence is owned by TranscriptAggregator's
+        // onMutation callback (see aggregator construction above). The previous
+        // `aggregator.rawFlow.collectLatest { dao.updateRawText(...) }` lived on a separate
+        // scope and was cancelled at stopRecording before the worker drained, losing all
+        // post-stop chunk merges. We keep `sessionPersistJob` as defense-in-depth: if the
+        // synchronous callback ever throws (Room migration error, low disk), the periodic
+        // collector at least keeps the rawText snapshot up to date.
         sessionPersistJob = scope.launch {
             aggregator.rawFlow.collectLatest { text ->
                 try {
                     sessionDao.updateRawText(sessionId, text)
                 } catch (t: Throwable) {
                     Log.w(TAG, "BidetSession rawText update failed: ${t.message}", t)
+                }
+            }
+        }
+        // Bug-3 fix (2026-05-10): mirror the produced-chunk count onto the session row so
+        // History rows can render "Transcribing N of M chunks…". Cancelled in stopRecording
+        // alongside sessionPersistJob.
+        chunkProducedMirrorJob = scope.launch {
+            captureEngine.producedChunkCountFlow.collectLatest { produced ->
+                if (produced <= 0) return@collectLatest
+                try {
+                    sessionDao.updateChunkCount(sessionId, produced)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "BidetSession chunkCount update failed: ${t.message}", t)
                 }
             }
         }
@@ -392,11 +472,18 @@ class RecordingService : Service() {
     fun stopRecording() {
         val activePipeline = pipeline
         val sessionId = activePipeline?.sessionId
-        val finalRawText = activePipeline?.aggregator?.currentText().orEmpty()
         val recordingStartedAt = sessionStartedAtMs
 
+        // Bug-1 fix (2026-05-10): the persist job is now defense-in-depth — the aggregator
+        // writes through to the DB synchronously inside its mutex. We still cancel it here
+        // because the worker keeps running through the drain phase (Bug-2) and re-emits to
+        // rawFlow on every merge; the synchronous onMutation has already written that
+        // text. Letting collectLatest race the mutation callback wastes a Room write per
+        // merge for no benefit.
         sessionPersistJob?.cancel()
         sessionPersistJob = null
+        chunkProducedMirrorJob?.cancel()
+        chunkProducedMirrorJob = null
 
         // Cap-watcher cancellation MUST run before we clear `pipeline` — the watcher's
         // beep coroutine is what stops mid-cadence when the user taps STOP early
@@ -411,39 +498,117 @@ class RecordingService : Service() {
         pipeline = null
         abandonAudioFocus()
 
-        // Bug B (2026-05-09): emit recorded-stopped state so the UI flips back to the
-        // welcome screen. Clear any prior engine-init banner — a successful stop after a
-        // successful start means the engine was fine.
-        _statusFlow.value = Status(false, null, 0L, null, null)
+        if (activePipeline == null || sessionId == null || recordingStartedAt <= 0L) {
+            // No active session — flip to idle and tear down immediately. Nothing to drain.
+            _statusFlow.value = Status(false, null, 0L, null, null, null)
+            tearDownForeground()
+            return
+        }
 
-        if (activePipeline != null) {
-            scope.launch {
-                try {
-                    // F1.1 (2026-05-09): join the worker BEFORE closing native resources.
-                    // The worker's handleAudio uses NonCancellable + Dispatchers.Default,
-                    // so an in-flight transcribe completes (and writes to the aggregator)
-                    // even though we cancelled the outer Job. Once stopAndJoin returns,
-                    // nothing is touching transcriptionEngine.
-                    activePipeline.worker.stopAndJoin()
-                    activePipeline.chunkQueue.close()
-                    activePipeline.transcriptionEngine.close()
-                } catch (t: Throwable) {
-                    Log.w(TAG, "stopRecording teardown threw: ${t.message}", t)
-                }
-                if (sessionId != null && recordingStartedAt > 0L) {
-                    val resolvedRawText = if (finalRawText.isNotBlank()) finalRawText
-                    else activePipeline.aggregator.currentText()
-                    try {
-                        finalizeSessionRow(sessionId, recordingStartedAt, resolvedRawText)
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "finalizeSessionRow threw: ${t.message}", t)
+        // Bug-2 fix (2026-05-10): we DO NOT tear down the foreground service here. We keep
+        // it alive while the worker drains the queue. The UI-visible "isRecording" flips
+        // to false immediately (welcome screen returns) but `drainProgress` carries the
+        // ongoing transcription state for the notification + the History progress
+        // indicator. The FGS only stops once the worker's job has completed naturally
+        // AND finalize has written the terminal row.
+        val initialMerged = activePipeline.aggregator.mergedCountFlow.value
+        val initialProduced = activePipeline.captureEngine.producedChunkCountFlow.value
+        _statusFlow.value = Status(
+            isRecording = false,
+            sessionId = null,
+            startedAtMs = 0L,
+            pipeline = null,
+            engineInitError = null,
+            drainProgress = DrainProgress(
+                sessionId = sessionId,
+                merged = initialMerged,
+                produced = initialProduced,
+                completed = false,
+            ),
+        )
+
+        // Swap the recording notification for the draining one immediately so the user
+        // sees "Transcribing N of M chunks remaining…" the moment they tap Stop. The
+        // notification will re-emit as merged advances (see drainJob below).
+        swapToDrainingNotification(merged = initialMerged, produced = initialProduced)
+
+        drainJob = scope.launch {
+            try {
+                // Closing the queue here is the trigger that lets the worker's
+                // consumeAsFlow() complete after draining. Buffered chunks remain readable;
+                // close() only prevents new offers (and the producer is already stopped).
+                activePipeline.chunkQueue.close()
+
+                // Track drain progress in the notification + statusFlow. The aggregator's
+                // mergedCountFlow advances every time a chunk merges; we re-issue the
+                // notification with the latest counts. We launch this as a child of the
+                // drain job so it cancels when the drain finishes.
+                val notifJob = launch {
+                    activePipeline.aggregator.mergedCountFlow.collect { merged ->
+                        val produced = activePipeline.captureEngine.producedChunkCountFlow.value
+                        _statusFlow.value = _statusFlow.value.copy(
+                            drainProgress = DrainProgress(
+                                sessionId = sessionId,
+                                merged = merged,
+                                produced = produced,
+                                completed = false,
+                            ),
+                        )
+                        swapToDrainingNotification(merged = merged, produced = produced)
                     }
                 }
+
+                // Wait for the worker to drain the queue naturally. NOT a cancel — we want
+                // every queued chunk transcribed before we tear down native resources.
+                activePipeline.worker.awaitDrainCompletion()
+
+                // Drain complete. Stop tracking + close native resources before finalize
+                // so the WAV concat and Room writes don't compete with whisper.cpp for
+                // CPU.
+                notifJob.cancel()
+                try {
+                    activePipeline.transcriptionEngine.close()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "transcriptionEngine.close threw: ${t.message}", t)
+                }
+
+                val finalRawText = activePipeline.aggregator.currentText()
+                val finalMerged = activePipeline.aggregator.mergedCountFlow.value
+                val finalProduced = activePipeline.captureEngine.producedChunkCountFlow.value
+                try {
+                    finalizeSessionRow(sessionId, recordingStartedAt, finalRawText, finalMerged)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "finalizeSessionRow threw: ${t.message}", t)
+                }
+
+                _statusFlow.value = Status(
+                    isRecording = false,
+                    sessionId = null,
+                    startedAtMs = 0L,
+                    pipeline = null,
+                    engineInitError = null,
+                    drainProgress = DrainProgress(
+                        sessionId = sessionId,
+                        merged = finalMerged,
+                        produced = finalProduced,
+                        completed = true,
+                    ),
+                )
+                postCompletionNotification(
+                    sessionId = sessionId,
+                    rawText = finalRawText,
+                    mergedCount = finalMerged,
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "drainJob threw: ${t.message}", t)
+            } finally {
+                drainJob = null
+                // Final clean state — drainProgress cleared, FGS gone. The completion
+                // notification posted above lives on its own ID so it survives this
+                // teardown.
+                _statusFlow.value = Status(false, null, 0L, null, null, null)
                 withContext(Dispatchers.Main) { tearDownForeground() }
             }
-        } else {
-            // No active session — tear down immediately.
-            tearDownForeground()
         }
     }
 
@@ -597,11 +762,18 @@ class RecordingService : Service() {
     /**
      * Phase 4A: concatenate per-chunk PCM files into one playable `audio.wav`, then update
      * the persisted [BidetSession] row with terminal fields.
+     *
+     * Bug-3 fix (2026-05-10): the [mergedChunkCount] arg matches the produced [chunkCount]
+     * after a successful drain. They differ only in failure cases (a chunk transcribed-as-
+     * marker still counts as merged; a chunk lost to DROP_OLDEST in ChunkQueue surfaces a
+     * MarkerLost which the worker also merges). Persisting both lets the History UI
+     * distinguish "fully transcribed" from "partial recovery".
      */
     private suspend fun finalizeSessionRow(
         sessionId: String,
         startedAtMs: Long,
         finalRawText: String,
+        mergedChunkCount: Int,
     ) {
         val endedAtMs = System.currentTimeMillis()
         val durationSeconds = ((endedAtMs - startedAtMs) / 1000L).toInt().coerceAtLeast(0)
@@ -638,6 +810,7 @@ class RecordingService : Service() {
                 rawText = resolvedRawText,
                 chunkCount = chunkCount,
                 audioWavPath = wavPath,
+                mergedChunkCount = mergedChunkCount,
                 notes = null, // preserve existing notes (e.g. "permission_denied")
             )
         } catch (t: Throwable) {
@@ -666,6 +839,76 @@ class RecordingService : Service() {
             nm.notify(NOTIFICATION_ID, buildRecordingNotification())
         } catch (t: Throwable) {
             Log.w(TAG, "swapToRecordingNotification threw: ${t.message}", t)
+        }
+    }
+
+    /**
+     * Bug-2 fix (2026-05-10): swap the live-recording notification for a "Transcribing N of
+     * M chunks remaining…" notification. Re-issued every time the merged count advances.
+     * Uses the same NOTIFICATION_ID so the FGS stays bound to one notification slot
+     * (Android won't promote a new ID without re-calling startForeground).
+     *
+     * The notification has NO Stop action — by this point the user already tapped Stop;
+     * presenting a second Stop would be confusing. Tapping the notification still opens
+     * the app (back to the History list, since isRecording is false).
+     */
+    private fun swapToDrainingNotification(merged: Int, produced: Int) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            nm.notify(NOTIFICATION_ID, buildDrainingNotification(merged = merged, produced = produced))
+        } catch (t: Throwable) {
+            Log.w(TAG, "swapToDrainingNotification threw: ${t.message}", t)
+        }
+    }
+
+    @VisibleForTesting
+    internal fun buildDrainingNotification(merged: Int, produced: Int): android.app.Notification {
+        // Clamp the displayed numbers — `produced` is the denominator and we promise N ≤ M
+        // even if the flows raced. A produced=0 case shouldn't happen on this path (we
+        // only enter drain when at least one chunk was offered), but guard anyway.
+        val safeProduced = produced.coerceAtLeast(merged.coerceAtLeast(1))
+        val text = getString(
+            R.string.bidet_recording_draining_text_format,
+            merged,
+            safeProduced,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.bidet_recording_draining_title))
+            .setContentText(text)
+            .setProgress(safeProduced, merged, false)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setOngoing(true)
+            .setContentIntent(openMainActivityPendingIntent())
+            .build()
+    }
+
+    /**
+     * Bug-2 fix (2026-05-10): once the drain finishes + finalize runs, post a
+     * dismissable completion notification on a NEW id so the user gets a clear "done"
+     * signal even after the FGS has stopped. Word count gives them a rough sense of the
+     * length without forcing them into the app.
+     */
+    private fun postCompletionNotification(sessionId: String, rawText: String, mergedCount: Int) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            // Approximate word count: a brain dump's whitespace tokenisation is good
+            // enough; we don't need linguistic accuracy.
+            val wordCount = rawText.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+            val text = getString(
+                R.string.bidet_recording_complete_text_format,
+                wordCount,
+                mergedCount,
+            )
+            val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(getString(R.string.bidet_recording_complete_title))
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setAutoCancel(true)
+                .setContentIntent(openMainActivityPendingIntent())
+                .build()
+            nm.notify(COMPLETION_NOTIFICATION_ID, notif)
+        } catch (t: Throwable) {
+            Log.w(TAG, "postCompletionNotification threw: ${t.message}", t)
         }
     }
 
@@ -778,6 +1021,12 @@ class RecordingService : Service() {
         private const val TAG = "BidetRecordingService"
         const val CHANNEL_ID = "bidet_recording"
         const val NOTIFICATION_ID = 1101
+        /**
+         * Bug-2 fix (2026-05-10): completion notification posts on a separate id so the
+         * dismissable "Brain dump ready" survives the FGS teardown. Distinct from
+         * NOTIFICATION_ID, which is owned by startForeground/stopForeground.
+         */
+        const val COMPLETION_NOTIFICATION_ID = 1102
         const val ACTION_START = "ai.bidet.phone.action.START_RECORDING"
         const val ACTION_STOP = "ai.bidet.phone.action.STOP_RECORDING"
 

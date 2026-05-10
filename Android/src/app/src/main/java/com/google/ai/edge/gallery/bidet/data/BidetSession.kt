@@ -52,4 +52,18 @@ data class BidetSession(
     val audioWavPath: String? = null,
     val chunkCount: Int = 0,
     val notes: String? = null,
+    /**
+     * Bug-3 fix (2026-05-10): per-merge counter so the History UI can render
+     * "Transcribing N of M chunks…" while the worker is still draining after the user
+     * tapped Stop. Updated every time [com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator]
+     * commits a merge to the DB. At finalize time it equals [chunkCount] (the queue is
+     * drained); during the transcribing-after-stop window it lags behind by however many
+     * chunks remain in the queue.
+     *
+     * Schema v2 (Migration 1→2 in [BidetDatabase.MIGRATION_1_2]). Pre-v2 rows backfill to 0;
+     * since they were finalized under v1 (which set endedAtMs), the History progress
+     * indicator's `endedAtMs IS NULL` condition is false and `mergedChunkCount` is never
+     * read for those rows.
+     */
+    val mergedChunkCount: Int = 0,
 )

@@ -32,8 +32,26 @@ import kotlinx.coroutines.sync.withLock
  *
  * Thread safety: [Mutex] serializes all mutations. The single-threaded [TranscriptionWorker]
  * is the only writer; the mutex defends against accidental concurrent UI-side `reset()`.
+ *
+ * Bug-1 fix (2026-05-10): `onMutation` is invoked SYNCHRONOUSLY inside the mutex on every
+ * successful merge. Persistence is the contract — the prior model relied on
+ * `aggregator.rawFlow.collectLatest { dao.updateRawText(...) }` running on a separate scope,
+ * which loses chunks that merge between `sessionPersistJob.cancel()` and `finalizeSessionRow`.
+ * On a 30-min recording with 60 chunks at 2× realtime CPU, that window is significant. The
+ * synchronous callback closes the gap: the DB is updated before append() returns to the
+ * worker, so the next chunk's transcribe can start knowing the previous chunk is durable.
  */
-class TranscriptAggregator {
+class TranscriptAggregator(
+    /**
+     * Called inside the merge mutex AFTER `_rawFlow.value` is updated, with the new full
+     * transcript text and the merged-chunk count. Intended for synchronous Room writes from
+     * [com.google.ai.edge.gallery.bidet.service.RecordingService]. Production wires this to
+     * `BidetSessionDao.updateRawTextAndMergedChunkCount`. Tests pass a no-op or a recording
+     * lambda. Not called for [reset]; the lifecycle owner (RecordingService) creates a fresh
+     * aggregator per session.
+     */
+    private val onMutation: suspend (String, Int) -> Unit = { _, _ -> },
+) {
 
     private val mutex = Mutex()
 
@@ -46,6 +64,15 @@ class TranscriptAggregator {
      * restart on app force-kill) don't double-count.
      */
     private val seenChunks: HashSet<Int> = HashSet()
+
+    private val _mergedCountFlow = MutableStateFlow(0)
+    /**
+     * Bug-3 fix (2026-05-10): merged-chunk count for the live progress indicator. UI
+     * compares this against the produced-chunk count from [com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine]
+     * to render "Transcribing N of M chunks…" in History rows AND a banner in
+     * SessionDetailScreen. Updated atomically with `_rawFlow` inside the mutex.
+     */
+    val mergedCountFlow: StateFlow<Int> = _mergedCountFlow.asStateFlow()
 
     /**
      * Merge a successful Whisper transcription for chunk [idx] into the running text.
@@ -68,10 +95,16 @@ class TranscriptAggregator {
             }
             val merged = DedupAlgorithm.mergeWithDedup(_rawFlow.value, text.trim())
             _rawFlow.value = merged
+            _mergedCountFlow.value = seenChunks.size
             Log.w(
                 "BidetTranscriptAggregator",
                 "append MERGED idx=$idx newTotalLen=${merged.length}",
             )
+            // Bug-1 fix: persist before releasing the lock. Failures are logged but do not
+            // re-throw — a transient DB write failure must not surface as a transcription
+            // failure to the user. The next merge will overwrite the row with the latest
+            // text, so a single dropped write self-heals on the next chunk.
+            persistInsideLock(merged, seenChunks.size, "append idx=$idx")
         }
     }
 
@@ -85,6 +118,10 @@ class TranscriptAggregator {
             val marker = "[chunk $idx transcription failed]"
             val cur = _rawFlow.value
             _rawFlow.value = if (cur.isEmpty()) marker else "$cur $marker"
+            _mergedCountFlow.value = seenChunks.size
+            // Bug-1 fix: failure markers are also user-visible RAW content, so they must
+            // persist on the same code path as successful merges.
+            persistInsideLock(_rawFlow.value, seenChunks.size, "failureMarker idx=$idx")
         }
     }
 
@@ -93,6 +130,21 @@ class TranscriptAggregator {
         mutex.withLock {
             _rawFlow.value = ""
             seenChunks.clear()
+            _mergedCountFlow.value = 0
+        }
+    }
+
+    /**
+     * Bug-1 fix (2026-05-10): per-mutation Room write, called from inside [mutex.withLock].
+     * Catches and logs throwables — by contract this never propagates a failure to the
+     * caller (the worker) because a DB hiccup must not break transcription. The next merge
+     * will re-write the row with up-to-date content, so any single missed write self-heals.
+     */
+    private suspend fun persistInsideLock(text: String, mergedCount: Int, label: String) {
+        try {
+            onMutation(text, mergedCount)
+        } catch (t: Throwable) {
+            Log.w("BidetTranscriptAggregator", "onMutation threw at $label: ${t.message}", t)
         }
     }
 

@@ -51,9 +51,10 @@ object BidetDatabaseModule {
             BidetDatabase::class.java,
             BidetDatabase.DATABASE_NAME,
         )
-            // Phase 4A is the first schema (v1). No migration paths exist yet, so the
-            // fallback path is moot; we omit fallbackToDestructiveMigration to avoid
-            // accidentally enabling lossy upgrades when a Phase 5+ Migration lands.
+            // 2026-05-10 (Bug-3): explicit migration v1 → v2 adds the mergedChunkCount
+            // column. fallbackToDestructiveMigration is still NOT added — losing a user's
+            // brain-dump history because of a schema bump is unacceptable.
+            .addMigrations(BidetDatabase.MIGRATION_1_2)
             .build()
 
     @Provides

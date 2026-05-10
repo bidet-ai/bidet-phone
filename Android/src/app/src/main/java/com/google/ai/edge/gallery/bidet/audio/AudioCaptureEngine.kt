@@ -29,6 +29,9 @@ import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.max
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Single continuous capture engine that drives the brain-dump pipeline.
@@ -81,6 +84,16 @@ class AudioCaptureEngine(
 
     /** Monotonically incrementing chunk index. */
     private var nextChunkIdx: Int = 0
+
+    /**
+     * Bug-3 fix (2026-05-10): observable produced-chunk count. Bumped after each successful
+     * [sendChunk] so [com.google.ai.edge.gallery.bidet.service.RecordingService] can mirror
+     * it onto the persisted [com.google.ai.edge.gallery.bidet.data.BidetSession.chunkCount]
+     * column. The History UI's "Transcribing N of M chunks…" indicator compares this
+     * (M, produced) against the aggregator's merged count (N, transcribed).
+     */
+    private val _producedChunkCountFlow = MutableStateFlow(0)
+    val producedChunkCountFlow: StateFlow<Int> = _producedChunkCountFlow.asStateFlow()
 
     /** Bytes accumulated since the last chunk emission. */
     private val pendingBuffer = ArrayDeque<ByteArray>()
@@ -278,6 +291,11 @@ class AudioCaptureEngine(
         )
         persistAtomic(idx, bytes)
         chunkQueue.offer(chunk)
+        // Bug-3: bump observable counter AFTER persist + offer so a downstream listener
+        // mirroring this onto BidetSession.chunkCount can rely on the chunk file existing on
+        // disk and being in the queue (or already dropped via DROP_OLDEST, which will have
+        // surfaced its own MarkerLost).
+        _producedChunkCountFlow.value = nextChunkIdx
     }
 
     /** Atomic write: tmp file + rename. Keeps disk consistent across crashes. */

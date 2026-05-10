@@ -46,6 +46,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -56,7 +57,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.google.ai.edge.gallery.R
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -164,6 +167,15 @@ private fun SessionRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
+    // Bug-3 fix (2026-05-10): pure function decides what live-progress signal (if any)
+    // this row needs. Pulled out of the Composable so SessionsListProgressTest can drive
+    // it on the JVM with no Compose runtime — see test file. The brief defines progress
+    // as either "still in progress" (endedAtMs IS NULL) OR "merged < produced", which
+    // covers the post-stop drain window where endedAtMs has been set BUT the worker
+    // hasn't fully drained yet (this can't happen in v0.2 because finalize runs only
+    // after drain — but the comparison costs us nothing and protects future refactors).
+    val progress: SessionRowProgress? = sessionRowProgress(session)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -198,6 +210,24 @@ private fun SessionRow(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        if (progress != null) {
+            // Secondary-text-color "Transcribing N of M chunks…" + a slim progress bar.
+            // Non-blocking: the user can still tap into the row; rawText snippet shows
+            // whatever has merged so far.
+            Text(
+                text = stringResource(
+                    R.string.bidet_history_transcribing_format,
+                    progress.merged,
+                    progress.produced,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LinearProgressIndicator(
+                progress = { progress.fraction },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
@@ -217,6 +247,44 @@ private fun SessionRow(
             )
         }
     }
+}
+
+/**
+ * Bug-3 fix (2026-05-10): rendered "Transcribing N of M chunks…" state for a single
+ * History row. [merged] / [produced] feed the format string; [fraction] feeds the
+ * LinearProgressIndicator. Returned by [sessionRowProgress]; null means no indicator.
+ */
+internal data class SessionRowProgress(
+    val merged: Int,
+    val produced: Int,
+) {
+    val fraction: Float
+        get() = if (produced <= 0) 0f else (merged.toFloat() / produced.toFloat()).coerceIn(0f, 1f)
+}
+
+/**
+ * Bug-3 fix (2026-05-10): pure function — returns a non-null [SessionRowProgress] iff the
+ * row should display "Transcribing N of M chunks…". Two cases trigger:
+ *
+ *   1. The session is still in progress (endedAtMs IS NULL). Either the user is actively
+ *      recording, OR the FGS is in the post-stop drain phase. In both cases we want a
+ *      progress indicator. We display N=mergedChunkCount, M=chunkCount.
+ *   2. The session has finalized (endedAtMs != null) BUT chunkCount > mergedChunkCount.
+ *      This shouldn't happen post-Bug-2 because finalize runs only after drain, but the
+ *      condition is in the brief — defensive, costs nothing, protects future refactors.
+ *
+ * Returns null when the row is fully transcribed (the normal terminal state).
+ */
+internal fun sessionRowProgress(session: BidetSession): SessionRowProgress? {
+    val producedSafe = session.chunkCount.coerceAtLeast(0)
+    val mergedSafe = session.mergedChunkCount.coerceAtLeast(0)
+    val inProgress = session.endedAtMs == null
+    val mergeLag = producedSafe > mergedSafe
+    if (!inProgress && !mergeLag) return null
+    // While endedAtMs is null and no chunks have been produced yet, we don't have
+    // anything to show — let the existing "Recording…" text handle it.
+    if (producedSafe == 0) return null
+    return SessionRowProgress(merged = mergedSafe, produced = producedSafe)
 }
 
 internal fun previewText(raw: String): String {

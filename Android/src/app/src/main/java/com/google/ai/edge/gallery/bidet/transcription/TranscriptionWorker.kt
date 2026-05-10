@@ -135,6 +135,13 @@ class TranscriptionWorker(
      * only then does the join return. Net effect: a Stop tap during transcribe yields the
      * chunk's text in the saved session rather than "[chunk N transcription failed]" + a
      * crash.
+     *
+     * Bug-2 contrast (2026-05-10): for the user-tap-Stop path, the new
+     * [com.google.ai.edge.gallery.bidet.service.RecordingService.stopRecording]
+     * uses [awaitDrainCompletion] instead — it does NOT cancel the consumer, so all queued
+     * chunks finish transcribing before the engine closes. [stopAndJoin] is retained for
+     * paths that want the old "cancel + cleanup" semantics (e.g. an onDestroy under
+     * extreme memory pressure where we accept losing the queued chunks).
      */
     suspend fun stopAndJoin() {
         val j = job ?: return
@@ -146,6 +153,39 @@ class TranscriptionWorker(
             // scope cancellation can race here. Either way the consumer is no longer
             // collecting; the caller's contract — "after this returns, nothing is in
             // transcribe()" — holds.
+        } finally {
+            job = null
+        }
+    }
+
+    /**
+     * Bug-2 fix (2026-05-10): wait for the consumer to drain the queue and complete
+     * naturally, WITHOUT cancelling. This is the user-Stop path. The contract:
+     *
+     *   1. Caller has already called [com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine.stop]
+     *      (no new chunks will be produced).
+     *   2. Caller has already called [com.google.ai.edge.gallery.bidet.chunk.ChunkQueue.close]
+     *      (signals end-of-stream to the consumer's `merge(...)`).
+     *   3. This method joins the consumer's Job. Because `consumeAsFlow()` completes when
+     *      the underlying channel is closed and all buffered items are drained, the
+     *      consumer's `collect { ... }` returns and the Job completes.
+     *   4. After this returns, the aggregator has merged every successfully-transcribed
+     *      chunk (subject to per-chunk transcribe failures, which were already converted
+     *      to failure markers by the consumer's catch block).
+     *
+     * Net effect: a 30-min recording with 5 chunks still queued at Stop will keep the FGS
+     * alive until those 5 chunks transcribe + persist. The user can navigate away; when
+     * the worker finishes, finalize runs and the FGS stops itself.
+     */
+    suspend fun awaitDrainCompletion() {
+        val j = job ?: return
+        try {
+            j.join()
+        } catch (_: Throwable) {
+            // join() does not normally throw; a parent-scope cancellation reaching here is
+            // the only realistic case (memory-pressure shutdown). The contract degrades
+            // gracefully — the aggregator's seenChunks set is what the History UI reads;
+            // any unjoined chunk is just visibly missing from the merged count.
         } finally {
             job = null
         }

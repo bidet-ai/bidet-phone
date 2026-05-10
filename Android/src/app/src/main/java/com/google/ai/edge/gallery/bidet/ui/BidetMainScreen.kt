@@ -77,7 +77,14 @@ import kotlinx.coroutines.withContext
  * Hoisted to a top-level `val` so the inline `remember { MutableStateFlow(...) }` fallback
  * stays a one-liner instead of a fully-qualified multi-line expression.
  */
-private val IDLE_STATUS = RecordingService.Status(false, null, 0L, null)
+private val IDLE_STATUS = RecordingService.Status(
+    isRecording = false,
+    sessionId = null,
+    startedAtMs = 0L,
+    pipeline = null,
+    engineInitError = null,
+    drainProgress = null,
+)
 
 /**
  * Top-level Bidet screen. Owns:
