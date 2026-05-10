@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.bidet.transcript
 
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,11 +56,22 @@ class TranscriptAggregator {
      * @param text the Whisper transcription for this chunk. Empty strings are silently dropped.
      */
     suspend fun append(idx: Int, startMs: Long, text: String) {
+        Log.w(
+            "BidetTranscriptAggregator",
+            "append ENTER idx=$idx textLen=${text.length} empty=${text.isEmpty()}",
+        )
         if (text.isEmpty()) return
         mutex.withLock {
-            if (!seenChunks.add(idx)) return // already merged
+            if (!seenChunks.add(idx)) {
+                Log.w("BidetTranscriptAggregator", "append SKIP_DUP idx=$idx")
+                return // already merged
+            }
             val merged = DedupAlgorithm.mergeWithDedup(_rawFlow.value, text.trim())
             _rawFlow.value = merged
+            Log.w(
+                "BidetTranscriptAggregator",
+                "append MERGED idx=$idx newTotalLen=${merged.length}",
+            )
         }
     }
 

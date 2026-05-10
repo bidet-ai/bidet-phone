@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.bidet.chunk
 
+import android.util.Log
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,7 @@ class ChunkQueue(capacity: Int = DEFAULT_CAPACITY) {
      * markers channel.
      */
     fun offer(chunk: Chunk.Audio) {
+        Log.w(TAG, "ChunkQueue ENQUEUE_AUDIO idx=${chunk.idx} bytes=${chunk.bytes.size}")
         // Snapshot the queue depth BEFORE we send — if it's already at capacity, the upcoming
         // send will trigger a DROP_OLDEST, and we want a marker for that dropped slot. We can't
         // know the precise dropped index without explicitly tracking it, so we synthesize a
@@ -66,6 +68,7 @@ class ChunkQueue(capacity: Int = DEFAULT_CAPACITY) {
             // Best-effort marker: we know SOMETHING got dropped, and the chunk-just-displaced
             // was at offset (chunk.idx - depth). Caller can refine later if needed.
             val droppedIdx = (chunk.idx - depth).coerceAtLeast(0)
+            Log.w(TAG, "ChunkQueue MARKER_LOST idx=$droppedIdx reason='queue full'")
             markers.trySend(Chunk.MarkerLost(idx = droppedIdx, reason = "queue full"))
         }
         channel.trySend(chunk)
@@ -91,6 +94,7 @@ class ChunkQueue(capacity: Int = DEFAULT_CAPACITY) {
 
     /** Close both channels. Safe to call multiple times. */
     fun close() {
+        Log.w(TAG, "ChunkQueue CLOSE")
         channel.close()
         markers.close()
     }
@@ -103,6 +107,8 @@ class ChunkQueue(capacity: Int = DEFAULT_CAPACITY) {
          * Equal to [DEFAULT_CAPACITY] so the marker fires exactly when DROP_OLDEST would.
          */
         const val CAPACITY_HIGH_WATERMARK: Int = DEFAULT_CAPACITY
+
+        private const val TAG = "BidetChunkQueue"
     }
 }
 

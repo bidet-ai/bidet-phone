@@ -157,6 +157,7 @@ class GemmaAudioEngine @Inject constructor(
      * actually free the underlying LiteRT-LM compute.
      */
     override suspend fun transcribe(floatPcm: FloatArray, sampleRateHz: Int): String {
+        Log.w(TAG, "transcribe ENTER pcmSize=${floatPcm.size}")
         require(sampleRateHz == 16_000) {
             "GemmaAudioEngine requires 16 kHz input, got $sampleRateHz"
         }
@@ -191,6 +192,7 @@ class GemmaAudioEngine @Inject constructor(
         // next send as a continuation, emitting stop tokens immediately. Each chunk needs
         // a clean slate. The shared Engine stays warm across chunks (no model reload);
         // only the per-turn Conversation is recreated.
+        Log.w(TAG, "transcribe createConversation BEGIN")
         val conv = engine.createConversation(
             ConversationConfig(
                 // 2026-05-09 fix: temperature=0.0 with topK/topP set is mathematically
@@ -209,15 +211,23 @@ class GemmaAudioEngine @Inject constructor(
                 tools = emptyList(),
             )
         )
+        Log.w(TAG, "transcribe createConversation DONE")
 
         try {
             return suspendCancellableCoroutine { cont ->
                 val sb = StringBuilder()
                 val callback = object : MessageCallback {
                     override fun onMessage(message: Message) {
-                        sb.append(message.toString())
+                        val s = message.toString()
+                        Log.w(
+                            TAG,
+                            "transcribe onMessage messageLen=${s.length} " +
+                                "preview='${s.take(40).replace("\n", " ")}'",
+                        )
+                        sb.append(s)
                     }
                     override fun onDone() {
+                        Log.w(TAG, "transcribe onDone finalLen=${sb.length}")
                         if (cont.isActive) cont.resume(sb.toString().trim())
                     }
                     override fun onError(throwable: Throwable) {
@@ -230,6 +240,7 @@ class GemmaAudioEngine @Inject constructor(
                     }
                 }
                 try {
+                    Log.w(TAG, "transcribe sendMessageAsync BEGIN wavBytes=${wavBytes.size}")
                     conv.sendMessageAsync(
                         Contents.of(
                             listOf(
@@ -259,6 +270,7 @@ class GemmaAudioEngine @Inject constructor(
                 }
             }
         } finally {
+            Log.w(TAG, "transcribe FINALLY closing conversation")
             try { conv.close() } catch (t: Throwable) {
                 Log.w(TAG, "transcribe: per-chunk conversation.close threw", t)
             }
