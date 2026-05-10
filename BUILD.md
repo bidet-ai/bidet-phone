@@ -15,10 +15,18 @@ cd Android/src
 ./gradlew :app:assembleDebug   # produces app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The `fetchWhisperModel` task fires automatically before `mergeDebugAssets`
-and downloads `ggml-tiny.en.bin` (~75 MB) into
-`app/src/main/assets/whisper/`. It is idempotent (SHA-256 short-circuit)
-so subsequent builds skip the network call.
+The `fetchMoonshineModel` task fires automatically before `mergeDebugAssets`
+and downloads + extracts the Moonshine-Tiny v2 quantized ONNX bundle
+(~30 MB compressed, ~44 MB extracted: encoder + decoder + tokens) into
+`app/src/main/assets/moonshine/`. It is idempotent (SHA-256 short-circuit
+on the tarball + a marker file in the extracted dir) so subsequent builds
+skip the network call.
+
+The vendored sherpa-onnx AAR lives at
+`app/libs/sherpa-onnx-static-link-onnxruntime-1.13.1.aar` (36.4 MB) —
+committed to the repo because it's not on Maven Central. The static-link
+variant statically links ONNX Runtime so there's no `libonnxruntime.so`
+collision with LiteRT-LM's bundled ORT (the gemma flavor's runtime).
 
 The Gemma 4 E4B model (~3.7 GB) is **NOT** bundled into the APK. The app
 downloads it on first launch (post-Gemma-Terms-consent) into the user's

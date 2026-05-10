@@ -36,11 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # 2026-05-08: whisper.cpp lives under Android/src/app/src/main/cpp/whisper.cpp as
-          # a git submodule, pinned to v1.8.4. Without recursive checkout the NDK build fails
-          # with "no source files" because the submodule directory is empty.
-          submodules: recursive
+        # v0.3 (2026-05-10): no submodules left after the whisper.cpp removal.
+        # sherpa-onnx is vendored as a prebuilt AAR at app/libs/.
 
       - name: Set up JDK 21 (Temurin)
         uses: actions/setup-java@v4
@@ -101,11 +98,12 @@ jobs:
         with:
           name: bidet-phone-debug-${{ github.sha }}
           # 2026-05-09: glob pattern handles both flavored and unflavored builds.
-          # whisper flavor → apk/whisper/debug/app-whisper-debug.apk
-          # gemma flavor   → apk/gemma/debug/app-gemma-debug.apk
-          # No flavor      → apk/debug/app-debug.apk (legacy)
+          # v0.3 (2026-05-10): whisper flavor renamed to moonshine.
+          # moonshine flavor → apk/moonshine/debug/app-moonshine-debug.apk
+          # gemma flavor     → apk/gemma/debug/app-gemma-debug.apk
+          # No flavor        → apk/debug/app-debug.apk (legacy)
           path: |
-            Android/src/app/build/outputs/apk/whisper/debug/*.apk
+            Android/src/app/build/outputs/apk/moonshine/debug/*.apk
             Android/src/app/build/outputs/apk/gemma/debug/*.apk
             Android/src/app/build/outputs/apk/debug/*.apk
           retention-days: 14

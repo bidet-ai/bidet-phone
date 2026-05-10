@@ -89,8 +89,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * audio is at the END, not the start. Truncating from the front (the prior bug) dropped the
  * 2-s tail every time, killing the dedup window between adjacent chunks.
  *
- * 2026-05-09 STATUS: experimental. Lives in the `gemma` flavor only. The `whisper` flavor
- * uses [WhisperEngine] and is unaffected.
+ * 2026-05-09 STATUS: experimental. Lives in the `gemma` flavor only. The `moonshine` flavor
+ * (renamed from `whisper` in v0.3) uses [MoonshineEngine] and is unaffected.
  */
 @OptIn(ExperimentalApi::class)
 class GemmaAudioEngine @Inject constructor(

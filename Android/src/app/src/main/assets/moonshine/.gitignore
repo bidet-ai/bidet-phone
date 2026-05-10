@@ -1,0 +1,9 @@
+# Moonshine-Tiny v2 quantized ONNX bundle. Fetched at build time by
+# fetchMoonshineModel (app/build.gradle.kts) from
+# github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27.tar.bz2.
+# Sha-256 verified before extraction. ~44 MB total (encoder + decoder + tokens).
+# Do NOT commit the binaries — they re-download cleanly from upstream + SHA matches.
+encoder_model.ort
+decoder_model_merged.ort
+tokens.txt
+.sha256.ok

@@ -42,7 +42,7 @@ import kotlin.math.max
  *    against the previous chunk's tail.
  *  - Persists each chunk to `${getExternalFilesDir(null)}/sessions/<session_id>/chunks/<idx>.pcm`
  *    via tmp+rename atomic write for crash recovery.
- *  - PCM bytes only (NOT WAV-with-header) — Whisper.cpp's transcribe API takes raw float32 PCM.
+ *  - PCM bytes only (NOT WAV-with-header) — sherpa-onnx's OfflineStream.acceptWaveform takes raw float32 PCM.
  *
  * Lifecycle is owned by [com.google.ai.edge.gallery.bidet.service.RecordingService]:
  *  - [start] arms the AudioRecord and spawns the reader thread (idempotent — if [start] has

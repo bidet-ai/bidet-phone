@@ -30,9 +30,13 @@ import java.io.File
  * declarations under each productFlavor. Reading the build script as text is the simplest way
  * to assert the contract without standing up an instrumented Android Context.
  *
+ * v0.3 (2026-05-10): the "whisper" flavor was renamed to "moonshine" when the on-device
+ * STT engine moved from Whisper-tiny + whisper.cpp to Moonshine-Tiny + sherpa-onnx. Tests
+ * updated to match.
+ *
  * Invariants asserted:
  *   - both flavors declare bidet_app_name_flavor
- *   - the engine name comes BEFORE the brand name (so "Whisper…" or "Gemma…" is what
+ *   - the engine name comes BEFORE the brand name (so "Moonshine…" or "Gemma…" is what
  *     survives launcher truncation, not "Bidet…")
  *   - the two flavor labels are not equal
  *   - per-flavor adaptive icon resources exist for both square and round masks
@@ -57,16 +61,16 @@ class FlavorBrandingTest {
     }
 
     @Test
-    fun whisperFlavor_declaresEngineFirstLabel() {
-        val match = WHISPER_RESVALUE_PATTERN.find(buildScript)
-        assertNotNull("whisper flavor must declare bidet_app_name_flavor resValue", match)
+    fun moonshineFlavor_declaresEngineFirstLabel() {
+        val match = MOONSHINE_RESVALUE_PATTERN.find(buildScript)
+        assertNotNull("moonshine flavor must declare bidet_app_name_flavor resValue", match)
         val label = match!!.groupValues[1]
         assertTrue(
-            "whisper label must lead with 'Whisper' so it survives launcher truncation, was: '$label'",
-            label.startsWith("Whisper"),
+            "moonshine label must lead with 'Moonshine' so it survives launcher truncation, was: '$label'",
+            label.startsWith("Moonshine"),
         )
         assertTrue(
-            "whisper label must still mention Bidet for brand recognition, was: '$label'",
+            "moonshine label must still mention Bidet for brand recognition, was: '$label'",
             label.contains("Bidet"),
         )
     }
@@ -88,13 +92,13 @@ class FlavorBrandingTest {
 
     @Test
     fun flavorLabels_areDistinct() {
-        val whisperLabel = WHISPER_RESVALUE_PATTERN.find(buildScript)?.groupValues?.get(1)
+        val moonshineLabel = MOONSHINE_RESVALUE_PATTERN.find(buildScript)?.groupValues?.get(1)
         val gemmaLabel = GEMMA_RESVALUE_PATTERN.find(buildScript)?.groupValues?.get(1)
-        assertNotNull(whisperLabel)
+        assertNotNull(moonshineLabel)
         assertNotNull(gemmaLabel)
         assertNotEquals(
-            "whisper and gemma flavors must show different launcher labels",
-            whisperLabel,
+            "moonshine and gemma flavors must show different launcher labels",
+            moonshineLabel,
             gemmaLabel,
         )
     }
@@ -121,29 +125,29 @@ class FlavorBrandingTest {
     }
 
     @Test
-    fun whisperFlavor_hasAdaptiveIconWithMaterialBlueBackground() {
-        val resDir = File(moduleDir, "src/whisper/res")
-        assertTrue("whisper flavor res dir must exist", resDir.isDirectory)
+    fun moonshineFlavor_hasAdaptiveIconWithMaterialBlueBackground() {
+        val resDir = File(moduleDir, "src/moonshine/res")
+        assertTrue("moonshine flavor res dir must exist", resDir.isDirectory)
 
         val launcherSquare = File(resDir, "mipmap-anydpi-v26/ic_launcher.xml")
         val launcherRound = File(resDir, "mipmap-anydpi-v26/ic_launcher_round.xml")
-        assertTrue("whisper square adaptive icon missing", launcherSquare.isFile)
-        assertTrue("whisper round adaptive icon missing", launcherRound.isFile)
+        assertTrue("moonshine square adaptive icon missing", launcherSquare.isFile)
+        assertTrue("moonshine round adaptive icon missing", launcherRound.isFile)
 
         val backgroundDrawable = File(resDir, "drawable/ic_launcher_background_flavor.xml")
-        assertTrue("whisper background drawable missing", backgroundDrawable.isFile)
+        assertTrue("moonshine background drawable missing", backgroundDrawable.isFile)
         assertTrue(
-            "whisper background must use Material Blue 700 (#1976D2)",
+            "moonshine background must use Material Blue 700 (#1976D2)",
             backgroundDrawable.readText().contains("#1976D2", ignoreCase = true),
         )
 
         val foreground = File(resDir, "drawable/ic_launcher_foreground_letter.xml")
-        assertTrue("whisper foreground letter drawable missing", foreground.isFile)
+        assertTrue("moonshine foreground letter drawable missing", foreground.isFile)
     }
 
     @Test
     fun adaptiveIcons_referenceFlavorBackgroundAndForegroundDrawables() {
-        val flavors = listOf("gemma", "whisper")
+        val flavors = listOf("gemma", "moonshine")
         val variants = listOf("ic_launcher.xml", "ic_launcher_round.xml")
         flavors.forEach { flavor ->
             variants.forEach { variant ->
@@ -161,8 +165,8 @@ class FlavorBrandingTest {
     }
 
     companion object {
-        private val WHISPER_RESVALUE_PATTERN = Regex(
-            """create\("whisper"\)\s*\{[^}]*?resValue\(\s*"string"\s*,\s*"bidet_app_name_flavor"\s*,\s*"([^"]+)"\s*\)""",
+        private val MOONSHINE_RESVALUE_PATTERN = Regex(
+            """create\("moonshine"\)\s*\{[^}]*?resValue\(\s*"string"\s*,\s*"bidet_app_name_flavor"\s*,\s*"([^"]+)"\s*\)""",
             RegexOption.DOT_MATCHES_ALL,
         )
         private val GEMMA_RESVALUE_PATTERN = Regex(

@@ -228,9 +228,9 @@ private fun ReadyScreen(
 
     // 2026-05-09: engine pre-warm gate. Pull the shared engine provider so the welcome
     // screen can disable the Record button while the 3.6 GB Gemma engine is still loading.
-    // On the whisper flavor the provider stays Idle forever (no one calls ensureReady) —
+    // On the moonshine flavor the provider stays Idle forever (no one calls ensureReady) —
     // we still bind to it here but [shouldShowEngineGate] short-circuits to false on
-    // whisper builds so the button works as before.
+    // moonshine builds so the button works as before.
     val sharedEngineProvider = remember(context) {
         BidetMainScreenHiltEntryPoint.sharedEngineProvider(context)
     }
@@ -250,7 +250,7 @@ private fun ReadyScreen(
     val pipeline = status.pipeline
     val aggregator = pipeline?.aggregator
     // F2.1 (2026-05-09): non-null when the most recent Record tap aborted because the
-    // transcription engine couldn't initialize (e.g. Whisper model missing from APK
+    // transcription engine couldn't initialize (e.g. Moonshine ONNX missing from APK
     // assets, Gemma not yet downloaded). Surfaced as an in-screen banner — see
     // EngineInitFailedBanner. Cleared on the next successful start or stop.
     val engineInitError = status.engineInitError
@@ -310,10 +310,11 @@ private fun ReadyScreen(
     //   * Recording AND aggregator ready  → full BidetTabsScreen with the live RAW tab +
     //                                        the recording header (timer + STOP).
     //   * Recording AND no aggregator yet → "Starting recording…" transitional screen with
-    //                                        timer + STOP. Whisper init usually takes ~1 sec
-    //                                        on the Pixel; this is a brief flash. Without it
-    //                                        the user would see the welcome screen with mic
-    //                                        already hot — that's the original Bug B.
+    //                                        timer + STOP. Moonshine init usually takes
+    //                                        well under 1 sec on the Pixel; this is a brief
+    //                                        flash. Without it the user would see the
+    //                                        welcome screen with mic already hot — that's
+    //                                        the original Bug B.
     //   * Not recording                   → welcome with Record + History.
     when {
         isRecording && aggregator != null && viewModel.hasAggregator -> {
@@ -370,15 +371,15 @@ private fun ReadyScreen(
 /**
  * 2026-05-09: welcome-screen Record button with the engine pre-warm gate.
  *
- *  - [EngineState.Ready] (or [EngineState.Idle] on whisper builds, since whisper never warms
- *    the LiteRT-LM engine) → enabled "Record" button. Fires [onRecord] on tap.
+ *  - [EngineState.Ready] (or [EngineState.Idle] on moonshine builds, since moonshine never
+ *    warms the LiteRT-LM engine) → enabled "Record" button. Fires [onRecord] on tap.
  *  - [EngineState.Loading] / Idle on a gemma build that's still warming up → disabled
  *    button labelled "Loading local AI…" with a small inline [CircularProgressIndicator].
  *    The user can still read everything else on the screen — only this control is gated.
  *  - [EngineState.Failed] → disabled button labelled "Tap to retry — local AI failed to
  *    load" with a retry callback that re-runs [BidetSharedLiteRtEngineProvider.ensureReady].
  *
- * Note Idle on the whisper build is treated as Ready because the whisper flavor doesn't
+ * Note Idle on the moonshine build is treated as Ready because the moonshine flavor doesn't
  * route through LiteRT-LM at all — the Application class skips ensureReady() there per
  * [BidetSharedLiteRtEngineProvider.shouldPrewarmOnAppLaunch]. We can detect that with the
  * BuildConfig flag at the call site, but routing the decision through the state flow keeps
@@ -390,12 +391,12 @@ private fun EngineGatedRecordButton(
     onRecord: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    val isWhisperFlavor = !com.google.ai.edge.gallery.BuildConfig.USE_GEMMA_AUDIO
+    val isMoonshineFlavor = !com.google.ai.edge.gallery.BuildConfig.USE_GEMMA_AUDIO
     when (engineState) {
         EngineState.Ready -> Button(onClick = onRecord) { Text("Record") }
         EngineState.Idle -> {
-            if (isWhisperFlavor) {
-                // Whisper flavor never warms the LiteRT-LM engine — the button works as
+            if (isMoonshineFlavor) {
+                // Moonshine flavor never warms the LiteRT-LM engine — the button works as
                 // before. The state flow stays Idle for the lifetime of the process.
                 Button(onClick = onRecord) { Text("Record") }
             } else {
@@ -436,9 +437,13 @@ private fun LoadingRecordButton() {
  */
 @Composable
 private fun EngineInitFailedBanner(error: RecordingService.EngineInitError) {
+    // v0.3 (2026-05-10): the EngineType.Whisper enum case still lives in RecordingService
+    // because that file is owned by another agent during the v0.3 refactor wave. The
+    // user-visible string is updated to reference Moonshine — the enum will get a follow-up
+    // rename in a separate PR.
     val message = when (error.engine) {
         RecordingService.EngineType.Whisper ->
-            "Whisper model file is missing — your build may be incomplete. Reinstall the APK."
+            "Moonshine ONNX model is missing — your build may be incomplete. Reinstall the APK."
         RecordingService.EngineType.Gemma ->
             "Gemma 4 model is not downloaded — finish first-run download from Settings."
     }

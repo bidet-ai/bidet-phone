@@ -35,9 +35,9 @@ class GalleryApplication : Application() {
 
   /**
    * 2026-05-09: shared engine provider for the gemma flavor. We only USE this on the gemma
-   * build (the whisper flavor uses whisper.cpp directly), but Hilt still injects it on both
-   * flavors — that's harmless since the singleton is just an idle handle until something
-   * acquires the engine.
+   * build (the moonshine flavor uses sherpa-onnx + Moonshine-Tiny directly), but Hilt still
+   * injects it on both flavors — that's harmless since the singleton is just an idle handle
+   * until something acquires the engine.
    */
   @Inject lateinit var sharedEngineProvider: BidetSharedLiteRtEngineProvider
 

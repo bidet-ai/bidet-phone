@@ -25,9 +25,10 @@ package com.google.ai.edge.gallery.bidet.service
  *     Service.startForeground(): ServiceRecord{...}'
  *
  * Android 12+ kills the process if startForeground is not called within 5 seconds of
- * startForegroundService. The whisper-flavor was within budget; the gemma flavor's
- * GemmaAudioEngine.initialize() pushed past the deadline because the LiteRT-LM Engine
- * factory call is slower. Fix: foreground promotion runs BEFORE any engine init.
+ * startForegroundService. The moonshine-flavor (formerly whisper) was within budget; the
+ * gemma flavor's GemmaAudioEngine.initialize() pushed past the deadline because the
+ * LiteRT-LM Engine factory call is slower. Fix: foreground promotion runs BEFORE any
+ * engine init.
  *
  * Exists as a separate type so a JVM unit test can assert ordering without booting an
  * Android Service. Production wires the [NoOp] impl; tests inject a recorder that captures

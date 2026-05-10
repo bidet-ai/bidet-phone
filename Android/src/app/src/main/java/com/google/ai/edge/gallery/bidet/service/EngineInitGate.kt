@@ -29,7 +29,7 @@ import com.google.ai.edge.gallery.bidet.transcription.TranscriptionEngine
  *  - Before: `RecordingService.startRecording()` did
  *      `val engine = TranscriptionEngine.create(ctx).also { it.initialize() }`
  *    The boolean return from `initialize()` was discarded. When init failed (e.g. the user
- *    installed a flavor APK without the bundled Whisper model — exactly the bug Mark hit on
+ *    installed a flavor APK without the bundled STT model — exactly the bug Mark hit on
  *    2026-05-09), `AudioCaptureEngine` was started anyway, every chunk fell through to the
  *    "[chunk N transcription failed]" marker path, and the user had no actionable signal.
  *  - After: this gate (called by `startRecording` BEFORE `AudioCaptureEngine.start()`)
@@ -38,7 +38,7 @@ import com.google.ai.edge.gallery.bidet.transcription.TranscriptionEngine
  *    its own service scope; this keeps the gate a pure synchronous decision and easy to
  *    unit-test without coroutine machinery.
  *
- * The gate is engine-agnostic — both [com.google.ai.edge.gallery.bidet.transcription.WhisperEngine]
+ * The gate is engine-agnostic — both [com.google.ai.edge.gallery.bidet.transcription.MoonshineEngine]
  * and [com.google.ai.edge.gallery.bidet.transcription.GemmaAudioEngine] satisfy it. The
  * [classifyEngine] callback exists only so the caller can map class → enum without forcing
  * this file to import both impls (keeping the dependency graph one-way: gate → interface,
