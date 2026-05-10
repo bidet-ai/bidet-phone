@@ -32,14 +32,20 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
+import com.google.ai.edge.gallery.ui.theme.cleanTabBodyStyle
 
 /**
  * Body for one of the two GENERATED tabs in the two-tab restructure (2026-05-10). Renders
@@ -84,6 +90,15 @@ private fun CleanTabBody(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
 
+    // bidet-ai a11y (2026-05-10, v0.3): observe the Clean-tab font picker so the cleaned-
+    // output Text nodes restyle the moment the user picks a different option in Settings.
+    // Default = Atkinson Hyperlegible. RAW transcript rendering is NOT wired to this flow
+    // on purpose — verbatim text is the source of truth, not a piece of UX to skin. See
+    // [A11yPreferences] + [CleanFontChoice] for the contract.
+    val cleanFontChoice by remember(context) { A11yPreferences.observeCleanFontChoice(context) }
+        .collectAsState(initial = A11yPreferences.DEFAULT_CLEAN_FONT_CHOICE)
+    val cleanOutputStyle: TextStyle = cleanTabBodyStyle(cleanFontChoice)
+
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -120,6 +135,7 @@ private fun CleanTabBody(
                     Text(
                         text = AnnotatedString(state.partialText),
                         modifier = Modifier.fillMaxWidth(),
+                        style = cleanOutputStyle,
                     )
                 }
             }
@@ -137,6 +153,7 @@ private fun CleanTabBody(
                                     .show()
                             },
                         ),
+                    style = cleanOutputStyle,
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onGenerate) { Text("Regenerate") }

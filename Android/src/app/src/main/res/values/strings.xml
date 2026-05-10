@@ -62,6 +62,17 @@
   <string name="bidet_settings_webhook_url_label" translatable="false">Webhook URL</string>
   <string name="bidet_settings_webhook_key_label" translatable="false">X-AG-KEY</string>
   <string name="bidet_settings_send_to_tp3" translatable="false">Send to TP3</string>
+  <string name="bidet_settings_a11y_section" translatable="false">Accessibility</string>
+  <string name="bidet_settings_clean_font_label" translatable="false">Font for cleaned text</string>
+  <string name="bidet_settings_clean_font_helper" translatable="false">Choose how the Clean-for-me and Clean-for-others outputs are rendered. The raw transcript always uses the default app font.</string>
+  <string name="bidet_settings_clean_font_system" translatable="false">System default</string>
+  <string name="bidet_settings_clean_font_system_helper" translatable="false">Use the app\'s default font; respects your Android accessibility settings (font scale, bold text).</string>
+  <string name="bidet_settings_clean_font_atkinson" translatable="false">Atkinson Hyperlegible (default)</string>
+  <string name="bidet_settings_clean_font_atkinson_helper" translatable="false">Designed by the Braille Institute for low-vision and reading-difference readers. Strong evidence base for letterform distinguishability.</string>
+  <string name="bidet_settings_clean_font_opendyslexic" translatable="false">OpenDyslexic</string>
+  <string name="bidet_settings_clean_font_opendyslexic_helper" translatable="false">Weighted-bottom letterforms; some dyslexic readers subjectively prefer it. RCT evidence is mixed — pick this if it works for you.</string>
+  <string name="bidet_settings_clean_font_andika" translatable="false">Andika</string>
+  <string name="bidet_settings_clean_font_andika_helper" translatable="false">Designed by SIL for literacy and reading-difference readers; large x-height, generous spacing, single-storey a/g.</string>
   <string name="bidet_chunks_behind" translatable="false">Transcription behind by %1$d chunks</string>
   <string name="bidet_chunk_failure_marker" translatable="false">[chunk %1$d transcription failed]</string>
   <!-- Two-tab restructure (2026-05-10): RAW lives at the top of the screen as a reading

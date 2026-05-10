@@ -19,6 +19,7 @@ package com.google.ai.edge.gallery.bidet.ui
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -44,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
+import com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice
 import com.google.ai.edge.gallery.bidet.ingest.Tp3Sender
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -77,6 +82,7 @@ fun BidetSettingsScreen(
     var promptExpressiveOverride by remember { mutableStateOf("") }
     var webhookUrl by remember { mutableStateOf("") }
     var webhookKey by remember { mutableStateOf("") }
+    var cleanFontChoice by remember { mutableStateOf(A11yPreferences.DEFAULT_CLEAN_FONT_CHOICE) }
     var status by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -87,6 +93,7 @@ fun BidetSettingsScreen(
             prefs[BidetTabsViewModel.promptOverrideKey(SupportAxis.EXPRESSIVE)] ?: ""
         webhookUrl = prefs[KEY_WEBHOOK_URL] ?: ""
         webhookKey = prefs[KEY_WEBHOOK_KEY] ?: ""
+        cleanFontChoice = A11yPreferences.getCleanFontChoice(context)
     }
 
     Column(
@@ -126,6 +133,66 @@ fun BidetSettingsScreen(
                 }
             }
         ) { Text("Save prompts") }
+
+        Spacer(Modifier.height(12.dp))
+        Divider()
+
+        // bidet-ai a11y (2026-05-10): "Font for cleaned text" radio picker.
+        // v0.3 — replaces the v0.2 single OpenDyslexic switch. Default flips to Atkinson
+        // Hyperlegible per the 2026-05-10 a11y audit. Persisted via [A11yPreferences]
+        // (DataStore-backed). Flipping a radio button instantly updates the rendering on
+        // BOTH Clean tabs because they observe the same flow. RAW transcript is unaffected
+        // by design — verbatim text is the source of truth, not a piece of UX to skin.
+        Text(stringResource(R.string.bidet_settings_a11y_section))
+        Text(stringResource(R.string.bidet_settings_clean_font_label))
+        Text(
+            stringResource(R.string.bidet_settings_clean_font_helper),
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 4.dp),
+        )
+        // The radio group. Order matches the visual hierarchy in the spec:
+        //   1. System default
+        //   2. Atkinson Hyperlegible (DEFAULT)
+        //   3. OpenDyslexic
+        //   4. Andika
+        // Each row is the entire RadioButton + Column(label + per-font helper) so a tap
+        // anywhere on the row selects (touch-target accessibility).
+        for (choice in CleanFontChoice.values()) {
+            val labelRes = when (choice) {
+                CleanFontChoice.SYSTEM_DEFAULT -> R.string.bidet_settings_clean_font_system
+                CleanFontChoice.ATKINSON_HYPERLEGIBLE ->
+                    R.string.bidet_settings_clean_font_atkinson
+                CleanFontChoice.OPEN_DYSLEXIC -> R.string.bidet_settings_clean_font_opendyslexic
+                CleanFontChoice.ANDIKA -> R.string.bidet_settings_clean_font_andika
+            }
+            val helperRes = when (choice) {
+                CleanFontChoice.SYSTEM_DEFAULT ->
+                    R.string.bidet_settings_clean_font_system_helper
+                CleanFontChoice.ATKINSON_HYPERLEGIBLE ->
+                    R.string.bidet_settings_clean_font_atkinson_helper
+                CleanFontChoice.OPEN_DYSLEXIC ->
+                    R.string.bidet_settings_clean_font_opendyslexic_helper
+                CleanFontChoice.ANDIKA -> R.string.bidet_settings_clean_font_andika_helper
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = cleanFontChoice == choice,
+                    onClick = {
+                        cleanFontChoice = choice
+                        scope.launch {
+                            A11yPreferences.setCleanFontChoice(context, choice)
+                            status = "Font: ${choice.storageKey}"
+                        }
+                    },
+                )
+                Column(modifier = Modifier.padding(start = 8.dp)) {
+                    Text(stringResource(labelRes))
+                    Text(stringResource(helperRes))
+                }
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
         Divider()
