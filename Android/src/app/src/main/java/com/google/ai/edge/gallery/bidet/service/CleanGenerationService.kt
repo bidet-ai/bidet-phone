@@ -195,6 +195,10 @@ class CleanGenerationService : Service() {
                         },
                     )
                 } else {
+                    // Long-dump chunking: drop per-window cap so wall-clock stays bearable
+                    // on Tensor G3 CPU (1024 → 512 tokens per window cuts decode time ~half).
+                    val perChunkCap = CHUNKED_PER_WINDOW_OUTPUT_TOKEN_CAP
+                    val totalCap = windows.size * perChunkCap
                     val parts = mutableListOf<String>()
                     var streamCounter = 0
                     windows.forEachIndexed { index, window ->
@@ -209,19 +213,20 @@ class CleanGenerationService : Service() {
                             append("your output with meta-commentary about parts.)")
                         }
                         val previouslyComposed = if (parts.isEmpty()) "" else parts.joinToString("\n\n") + "\n\n"
+                        val header = "Cleaning part ${index + 1} of ${windows.size}…\n\n"
                         val partText = gemma.runInferenceStreaming(
                             systemPrompt = partSystemPrompt,
                             userPrompt = window,
-                            maxOutputTokens = tokenCap,
+                            maxOutputTokens = perChunkCap,
                             temperature = temperature,
                             onChunk = { cumulative, _ ->
                                 streamCounter += 1
                                 _stateFlow.value = GenerationState.Streaming(
                                     sessionId = sessionId,
                                     axis = axis,
-                                    partialText = previouslyComposed + cumulative,
+                                    partialText = header + previouslyComposed + cumulative,
                                     tokenCount = streamCounter,
-                                    tokenCap = tokenCap,
+                                    tokenCap = totalCap,
                                 )
                             },
                         )
@@ -350,6 +355,14 @@ class CleanGenerationService : Service() {
 
         const val DEFAULT_TOKEN_CAP: Int = 2048
         const val DEFAULT_TEMPERATURE: Float = 0.4f
+
+        /**
+         * Per-window output cap when [com.google.ai.edge.gallery.bidet.cleaning.RawChunker]
+         * splits the RAW. Lower than the single-shot cap so wall-clock stays bearable on
+         * Tensor G3 CPU (a 6-window 18-min dump at 2048 tokens/window = ~30 min decode;
+         * at 512 tokens/window = ~7 min decode).
+         */
+        const val CHUNKED_PER_WINDOW_OUTPUT_TOKEN_CAP: Int = 512
 
         fun startIntent(
             context: Context,

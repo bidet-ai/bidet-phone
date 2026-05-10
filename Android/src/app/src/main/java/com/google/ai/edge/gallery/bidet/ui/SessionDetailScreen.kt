@@ -350,25 +350,35 @@ class SessionDetailViewModel @Inject constructor(
                 target.value = TabState.Failed("RAW transcript is empty.")
                 return@launch
             }
-            target.value = TabState.Generating
+            target.value = TabState.Streaming(partialText = "", tokenCount = 0, tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP)
             try {
                 val systemPrompt = resolveSystemPrompt(axis)
                 val result = withContext(Dispatchers.Default) {
-                    // Gemma 4 E2B has a hard 2048-token context cap. Long History RAWs
-                    // (Mark's 18m dump = ~3,400 input tokens) overflow the single-call
-                    // budget. Chunk to ~2400-char windows, clean each with a "part N of
-                    // M" annotation, stitch with paragraph breaks. Short dumps still take
-                    // the single-call path so behaviour is unchanged.
                     val windows = RawChunker.chunk(raw)
                     if (windows.size <= 1) {
-                        gemma.runInference(
+                        // Short dump — single streaming call, behaviour unchanged.
+                        gemma.runInferenceStreaming(
                             systemPrompt = systemPrompt,
                             userPrompt = raw,
                             maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
                             temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
+                            onChunk = { cumulative, chunkIndex ->
+                                target.value = TabState.Streaming(
+                                    partialText = cumulative,
+                                    tokenCount = chunkIndex,
+                                    tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                                )
+                            },
                         )
                     } else {
+                        // Long dump — chunked streaming. Per-window output cap drops to
+                        // CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP so wall-clock stays bearable;
+                        // partial text shows "Cleaning part N of M…" header above
+                        // already-completed parts and the currently-streaming part so the
+                        // user sees text growing instead of an indefinite spinner.
                         val parts = mutableListOf<String>()
+                        val totalCap = windows.size * BidetTabsViewModel.CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP
+                        var streamCounter = 0
                         windows.forEachIndexed { index, window ->
                             val partSystemPrompt = buildString {
                                 append(systemPrompt)
@@ -380,11 +390,21 @@ class SessionDetailViewModel @Inject constructor(
                                 append("do not re-introduce content from earlier parts and do not preface ")
                                 append("your output with meta-commentary about parts.)")
                             }
-                            val partText = gemma.runInference(
+                            val priorBlock = if (parts.isEmpty()) "" else parts.joinToString("\n\n") + "\n\n"
+                            val header = "Cleaning part ${index + 1} of ${windows.size}…\n\n"
+                            val partText = gemma.runInferenceStreaming(
                                 systemPrompt = partSystemPrompt,
                                 userPrompt = window,
-                                maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                                maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP,
                                 temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
+                                onChunk = { cumulative, _ ->
+                                    streamCounter += 1
+                                    target.value = TabState.Streaming(
+                                        partialText = header + priorBlock + cumulative,
+                                        tokenCount = streamCounter,
+                                        tokenCap = totalCap,
+                                    )
+                                },
                             )
                             parts.add(partText.trim())
                         }
