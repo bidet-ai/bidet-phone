@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.bidet.ui
 
 import android.content.Context
+import com.google.ai.edge.gallery.bidet.cleaning.RawChunker
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -353,12 +354,42 @@ class SessionDetailViewModel @Inject constructor(
             try {
                 val systemPrompt = resolveSystemPrompt(axis)
                 val result = withContext(Dispatchers.Default) {
-                    gemma.runInference(
-                        systemPrompt = systemPrompt,
-                        userPrompt = raw,
-                        maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
-                        temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
-                    )
+                    // Gemma 4 E2B has a hard 2048-token context cap. Long History RAWs
+                    // (Mark's 18m dump = ~3,400 input tokens) overflow the single-call
+                    // budget. Chunk to ~2400-char windows, clean each with a "part N of
+                    // M" annotation, stitch with paragraph breaks. Short dumps still take
+                    // the single-call path so behaviour is unchanged.
+                    val windows = RawChunker.chunk(raw)
+                    if (windows.size <= 1) {
+                        gemma.runInference(
+                            systemPrompt = systemPrompt,
+                            userPrompt = raw,
+                            maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                            temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
+                        )
+                    } else {
+                        val parts = mutableListOf<String>()
+                        windows.forEachIndexed { index, window ->
+                            val partSystemPrompt = buildString {
+                                append(systemPrompt)
+                                append("\n\n(You are cleaning part ")
+                                append(index + 1)
+                                append(" of ")
+                                append(windows.size)
+                                append(" of a long brain dump. Stay faithful to THIS segment only — ")
+                                append("do not re-introduce content from earlier parts and do not preface ")
+                                append("your output with meta-commentary about parts.)")
+                            }
+                            val partText = gemma.runInference(
+                                systemPrompt = partSystemPrompt,
+                                userPrompt = window,
+                                maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                                temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
+                            )
+                            parts.add(partText.trim())
+                        }
+                        parts.joinToString("\n\n")
+                    }
                 }
                 val now = System.currentTimeMillis()
                 target.value = TabState.Cached(result, now)
