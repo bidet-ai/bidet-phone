@@ -16,7 +16,6 @@
 
 package com.google.ai.edge.gallery.bidet.transcription
 
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -97,20 +96,14 @@ class MoonshineEngineTest {
     }
 
     @Test
-    fun transcribe_rejectsNon16kHzInputFromContract() = runTest {
+    fun engineClass_exposesPublicTranscribeMethod() {
         // We can't construct a real MoonshineEngine here (it would try to load the JNI
-        // lib), but we *can* assert that the engine class compiles against the
-        // TranscriptionEngine contract that demands 16 kHz. The require() guard lives in
-        // the implementation; a mis-port (e.g. silently passing 8 kHz to sherpa-onnx)
-        // would fail this expectation. The structural check below is enough — if the
-        // contract is preserved at the source level, the runtime rejection holds too.
-        val src = MoonshineEngine::class.java
-            .getResourceAsStream("/com/google/ai/edge/gallery/bidet/transcription/MoonshineEngine.kt")
-        // Resource lookup will be null because Kotlin sources aren't on the classpath at
-        // test time — fall through to a static reflection check on the public surface.
-        val transcribe = src
-            ?: MoonshineEngine::class.java.declaredMethods.firstOrNull { it.name == "transcribe" }
-        assertNotNull("MoonshineEngine.transcribe(...) must remain public", transcribe)
+        // lib), but we can assert via reflection that the engine class still exposes the
+        // public `transcribe` method the TranscriptionWorker depends on. A typo / signature
+        // change at refactor time would fail this expectation.
+        val transcribe = MoonshineEngine::class.java.declaredMethods
+            .firstOrNull { it.name == "transcribe" }
+        assertNotNull("MoonshineEngine.transcribe(...) must remain present", transcribe)
     }
 
     @Test
