@@ -51,8 +51,10 @@ import org.junit.Test
  *     directly; now the shared provider does it on behalf of audio callers only.
  *  2. requireAudio=false → audioBackend is null. The chat client must NOT inadvertently
  *     bring up an audio-enabled engine (the audio backend reserves resources).
- *  3. backend stays GPU regardless of audio mode (per LiteRT-LM 0.10.1 best practice for
- *     Gemma 4 E4B on Pixel 8 Pro).
+ *  3. backend is Backend.CPU regardless of audio mode. 2026-05-09: was previously asserted
+ *     as Backend.GPU; flipped because Tensor G3 (Pixel 8 Pro) has no OpenCL and
+ *     Backend.GPU() hangs in Engine.initialize(). See LiteRT-LM Issue #1860 +
+ *     `engine_prewarm_fix.md` writeup.
  *  4. modelPath / maxNumTokens / cacheDir are wired through faithfully.
  *  5. A missing-model error is raised before the factory would be called — caller maps
  *     this to a user-actionable "complete first-run download" message.
@@ -94,9 +96,18 @@ class BidetSharedLiteRtEngineProviderTest {
                     "per LiteRT-LM 0.10.1+).",
                 cfg.audioBackend is Backend.CPU,
             )
+            // 2026-05-09: Tensor G3 has no OpenCL; Backend.GPU() silently hangs in
+            // Engine.initialize() on the Pixel 8 Pro (LiteRT-LM Issue #1860). We pin the
+            // production-stable choice — main backend = Backend.CPU — so a future
+            // refactor that flips back to GPU without reading the comment will fail this
+            // test loudly instead of reintroducing the foreground-service ANR.
             assertTrue(
-                "Text/main backend must remain GPU regardless of audio mode.",
-                cfg.backend is Backend.GPU,
+                "Main backend must be Backend.CPU on Tensor G3 / Pixel 8 Pro — see " +
+                    "https://github.com/google-ai-edge/LiteRT-LM/issues/1860 . If this " +
+                    "test fails because someone flipped to Backend.GPU(): DO NOT update " +
+                    "the assertion. Read the comment in BidetSharedLiteRtEngineProvider.kt " +
+                    "and the engine_prewarm_fix writeup first.",
+                cfg.backend is Backend.CPU,
             )
             assertEquals(modelFile.absolutePath, cfg.modelPath)
             assertEquals(1024, cfg.maxNumTokens)
@@ -126,7 +137,10 @@ class BidetSharedLiteRtEngineProviderTest {
                     "acquire() upgrade path documented on the Handle.audioEnabled field.",
                 cfg.audioBackend,
             )
-            assertTrue(cfg.backend is Backend.GPU)
+            // 2026-05-09: see audioCaller test — Backend.CPU is the production-stable
+            // choice on Tensor G3. Pin both flavors of caller to guarantee no path
+            // accidentally re-enables Backend.GPU().
+            assertTrue(cfg.backend is Backend.CPU)
             assertEquals(512, cfg.maxNumTokens)
             assertEquals(null, cfg.cacheDir)
         } finally {
