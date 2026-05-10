@@ -45,7 +45,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
-import com.google.ai.edge.gallery.ui.theme.cleanTabBody
+import com.google.ai.edge.gallery.ui.theme.cleanTabBodyStyle
 
 /**
  * Body for one of the two GENERATED tabs in the two-tab restructure (2026-05-10). Renders
@@ -90,13 +90,14 @@ private fun CleanTabBody(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
 
-    // bidet-ai a11y (2026-05-10): observe the OpenDyslexic toggle so the cleaned-output
-    // Text nodes restyle the moment the user flips it. RAW transcript rendering is NOT
-    // wired to this flow on purpose — verbatim text is not re-skinned. See
-    // [A11yPreferences] for the contract.
-    val useOpenDyslexic by remember(context) { A11yPreferences.observeUseOpenDyslexic(context) }
-        .collectAsState(initial = A11yPreferences.DEFAULT_USE_OPEN_DYSLEXIC)
-    val cleanOutputStyle: TextStyle = if (useOpenDyslexic) cleanTabBody else TextStyle.Default
+    // bidet-ai a11y (2026-05-10, v0.3): observe the Clean-tab font picker so the cleaned-
+    // output Text nodes restyle the moment the user picks a different option in Settings.
+    // Default = Atkinson Hyperlegible. RAW transcript rendering is NOT wired to this flow
+    // on purpose — verbatim text is the source of truth, not a piece of UX to skin. See
+    // [A11yPreferences] + [CleanFontChoice] for the contract.
+    val cleanFontChoice by remember(context) { A11yPreferences.observeCleanFontChoice(context) }
+        .collectAsState(initial = A11yPreferences.DEFAULT_CLEAN_FONT_CHOICE)
+    val cleanOutputStyle: TextStyle = cleanTabBodyStyle(cleanFontChoice)
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),

@@ -20,97 +20,236 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
+import org.junit.Before
 import org.junit.Test
 import java.io.File
 
 /**
- * Pure-state regression test for [A11yPreferences].
+ * Pure-state regression test for [A11yPreferences]'s v0.3 picker contract.
  *
  * The production code routes through `Context.bidetDataStore`, which would require Robolectric
  * (and an Application context) to construct in a JVM unit test. The contract we actually care
- * about — *the right key + the right default + the toggle round-trips through the preferences
- * file* — can be tested directly against a `PreferenceDataStoreFactory.create(file)` instance,
- * using the same `KEY_USE_OPEN_DYSLEXIC` and `DEFAULT_USE_OPEN_DYSLEXIC` constants that the
- * production code reads.
+ * about — *the right keys + the right default + the picker round-trips through the
+ * preferences file + the v0.2 → v0.3 migration shim works* — can be tested directly against a
+ * `PreferenceDataStoreFactory.create(file)` instance, using the same key + default constants
+ * the production code reads via [A11yPreferences.resolveCleanFontChoice].
  *
- * If a future agent renames the key or flips the default, this test fails — which is the
- * load-bearing guarantee the brief asks for ("toggle persists and reloads").
- *
- * Each test gets its own scratch file + its own DataStore instance. Reuse of a file across
- * DataStores in the same process throws "multiple DataStores active for the same file"
- * (FileStorage.kt:52), so we don't try to re-instantiate to "simulate a reload" — instead we
- * verify the write→read round-trip on a single DataStore (DataStore guarantees that writes are
- * observed by subsequent reads, which is the persistence guarantee we depend on at runtime).
+ * If a future agent renames a key, flips the default, or breaks the migration, this test
+ * fails — which is the load-bearing guarantee the brief asks for ("persist + reload tests").
  */
 class A11yPreferencesTest {
 
-    @Test
-    fun default_isOff_whenKeyNeverWritten() = runTestWithStore { store ->
-        val prefs = store.data.first()
-        val value = prefs[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
-            ?: A11yPreferences.DEFAULT_USE_OPEN_DYSLEXIC
-        assertFalse("OpenDyslexic toggle MUST default OFF — opt-in only", value)
-        assertEquals(false, A11yPreferences.DEFAULT_USE_OPEN_DYSLEXIC)
+    private lateinit var tempFile: File
+    private lateinit var dataStore: DataStore<Preferences>
+
+    @Before
+    fun setUp() {
+        tempFile = File.createTempFile("a11y_prefs_test_", ".preferences_pb")
+        // PreferenceDataStoreFactory expects to OWN the file path, so delete the empty
+        // createTempFile() artifact and let DataStore create it on first write.
+        tempFile.delete()
+        dataStore = PreferenceDataStoreFactory.create(produceFile = { tempFile })
     }
 
-    @Test
-    fun toggleOn_persistsAcrossReads() = runTestWithStore { store ->
-        store.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = true }
-        val value = store.data.first()[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
-        assertTrue("Toggle ON must be readable after the write completes", value == true)
+    @After
+    fun tearDown() {
+        if (tempFile.exists()) tempFile.delete()
     }
 
+    // -------------------------------------------------------------------------------------
+    // Default + key-stability contract
+    // -------------------------------------------------------------------------------------
+
     @Test
-    fun toggleOff_persistsAfterPreviousOn() = runTestWithStore { store ->
-        store.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = true }
-        store.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = false }
-        val value = store.data.first()[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
+    fun default_isAtkinsonHyperlegible_whenNeitherKeyEverWritten() = runTest {
+        val prefs = dataStore.data.first()
+        val resolved = A11yPreferences.resolveCleanFontChoice(prefs)
         assertEquals(
-            "Most recent write (false) must win — proves DataStore actually persists state, " +
-                "not a stale in-memory flag.",
-            false,
-            value,
+            "Default Clean-tab font MUST be Atkinson Hyperlegible (v0.3 spec).",
+            CleanFontChoice.ATKINSON_HYPERLEGIBLE,
+            resolved,
+        )
+        assertEquals(CleanFontChoice.ATKINSON_HYPERLEGIBLE, A11yPreferences.DEFAULT_CLEAN_FONT_CHOICE)
+        assertEquals(CleanFontChoice.ATKINSON_HYPERLEGIBLE, CleanFontChoice.DEFAULT)
+    }
+
+    @Test
+    fun key_names_areStable() {
+        // The DataStore key names are part of the on-disk schema. Renaming them would orphan
+        // every user's saved preference. Pin literals here so a future rename triggers a
+        // visible test failure and forces a deliberate migration decision.
+        assertEquals("a11y_clean_font_choice", A11yPreferences.KEY_CLEAN_FONT_CHOICE.name)
+        assertEquals(
+            "a11y_use_open_dyslexic",
+            A11yPreferences.KEY_LEGACY_USE_OPEN_DYSLEXIC.name,
         )
     }
 
     @Test
-    fun key_name_isStable() {
-        // The DataStore key name is part of the on-disk schema. Renaming it would orphan
-        // every user's saved preference. Pin the literal here so a future rename triggers a
-        // visible test failure and forces a deliberate migration decision.
-        assertEquals("a11y_use_open_dyslexic", A11yPreferences.KEY_USE_OPEN_DYSLEXIC.name)
+    fun cleanFontChoice_storageKeys_areStable() {
+        // The enum's storageKey is also part of the on-disk schema (the value side, vs. the
+        // key name above). Same reason to pin literals.
+        assertEquals("system_default", CleanFontChoice.SYSTEM_DEFAULT.storageKey)
+        assertEquals(
+            "atkinson_hyperlegible",
+            CleanFontChoice.ATKINSON_HYPERLEGIBLE.storageKey,
+        )
+        assertEquals("open_dyslexic", CleanFontChoice.OPEN_DYSLEXIC.storageKey)
+        assertEquals("andika", CleanFontChoice.ANDIKA.storageKey)
     }
 
-    /**
-     * Helper: spin up a fresh DataStore on a unique scratch file, run the test body, then
-     * cancel the DataStore's CoroutineScope (releasing the file lock) and delete the file.
-     * Without the scope-cancel, leaking DataStore instances poison subsequent tests.
-     */
-    private fun runTestWithStore(block: suspend (DataStore<Preferences>) -> Unit) = runTest {
-        val tempFile = File.createTempFile("a11y_prefs_test_", ".preferences_pb")
-        tempFile.delete() // DataStore wants to own the path; createTempFile() already touched it.
-        val scopeJob = SupervisorJob()
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + scopeJob)
-        val store = PreferenceDataStoreFactory.create(
-            scope = scope,
-            produceFile = { tempFile },
-        )
-        try {
-            block(store)
-        } finally {
-            scope.cancel()
-            scopeJob.cancel()
-            // best-effort cleanup of the scratch file
-            tempFile.delete()
+    // -------------------------------------------------------------------------------------
+    // Persist + reload across all four picker values
+    // -------------------------------------------------------------------------------------
+
+    @Test
+    fun pickAtkinson_persists_andReloads() = runTest {
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.ATKINSON_HYPERLEGIBLE.storageKey
         }
+        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
+        val resolved = A11yPreferences.resolveCleanFontChoice(reloaded.data.first())
+        assertEquals(CleanFontChoice.ATKINSON_HYPERLEGIBLE, resolved)
+    }
+
+    @Test
+    fun pickOpenDyslexic_persists_andReloads() = runTest {
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.OPEN_DYSLEXIC.storageKey
+        }
+        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
+        val resolved = A11yPreferences.resolveCleanFontChoice(reloaded.data.first())
+        assertEquals(CleanFontChoice.OPEN_DYSLEXIC, resolved)
+    }
+
+    @Test
+    fun pickAndika_persists_andReloads() = runTest {
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.ANDIKA.storageKey
+        }
+        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
+        val resolved = A11yPreferences.resolveCleanFontChoice(reloaded.data.first())
+        assertEquals(CleanFontChoice.ANDIKA, resolved)
+    }
+
+    @Test
+    fun pickSystemDefault_persists_andReloads() = runTest {
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.SYSTEM_DEFAULT.storageKey
+        }
+        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
+        val resolved = A11yPreferences.resolveCleanFontChoice(reloaded.data.first())
+        assertEquals(CleanFontChoice.SYSTEM_DEFAULT, resolved)
+    }
+
+    @Test
+    fun changingPick_overwritesPriorPick() = runTest {
+        // Atkinson -> OpenDyslexic -> Andika -> verify only the last sticks.
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.ATKINSON_HYPERLEGIBLE.storageKey
+        }
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.OPEN_DYSLEXIC.storageKey
+        }
+        dataStore.edit {
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.ANDIKA.storageKey
+        }
+        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
+        val resolved = A11yPreferences.resolveCleanFontChoice(reloaded.data.first())
+        assertEquals(CleanFontChoice.ANDIKA, resolved)
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Robustness — unknown / corrupt values fall back to default, never crash
+    // -------------------------------------------------------------------------------------
+
+    @Test
+    fun unknownStorageKey_fallsBackToDefault() = runTest {
+        dataStore.edit { it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = "papyrus" }
+        val resolved = A11yPreferences.resolveCleanFontChoice(dataStore.data.first())
+        assertEquals(CleanFontChoice.DEFAULT, resolved)
+    }
+
+    @Test
+    fun emptyStorageKey_fallsBackToDefault() = runTest {
+        dataStore.edit { it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = "" }
+        val resolved = A11yPreferences.resolveCleanFontChoice(dataStore.data.first())
+        assertEquals(CleanFontChoice.DEFAULT, resolved)
+    }
+
+    // -------------------------------------------------------------------------------------
+    // v0.2 → v0.3 migration shim
+    // -------------------------------------------------------------------------------------
+
+    @Test
+    fun v02LegacyOpenDyslexicTrue_migratesTo_OpenDyslexic_whenNewKeyAbsent() = runTest {
+        // A v0.2 user who toggled the OpenDyslexic switch ON has KEY_LEGACY_USE_OPEN_DYSLEXIC=true
+        // and no KEY_CLEAN_FONT_CHOICE. The migration shim must treat that as an explicit
+        // OpenDyslexic preference, NOT silently flip them to Atkinson on upgrade.
+        dataStore.edit { it[A11yPreferences.KEY_LEGACY_USE_OPEN_DYSLEXIC] = true }
+        val resolved = A11yPreferences.resolveCleanFontChoice(dataStore.data.first())
+        assertEquals(
+            "v0.2 OpenDyslexic ON must migrate to CleanFontChoice.OPEN_DYSLEXIC.",
+            CleanFontChoice.OPEN_DYSLEXIC,
+            resolved,
+        )
+    }
+
+    @Test
+    fun v02LegacyOpenDyslexicFalse_migratesTo_AtkinsonDefault_whenNewKeyAbsent() = runTest {
+        // A v0.2 user who explicitly toggled OpenDyslexic OFF (it was the default OFF
+        // anyway, but they may have toggled it) gets the new default — Atkinson Hyperlegible.
+        dataStore.edit { it[A11yPreferences.KEY_LEGACY_USE_OPEN_DYSLEXIC] = false }
+        val resolved = A11yPreferences.resolveCleanFontChoice(dataStore.data.first())
+        assertEquals(CleanFontChoice.ATKINSON_HYPERLEGIBLE, resolved)
+    }
+
+    @Test
+    fun newKey_winsOver_legacyKey_evenIfLegacyTrue() = runTest {
+        // A user who upgrades, opens Settings, picks Andika — both keys are now on disk
+        // (legacy=true from before, new=andika). The new key MUST win; the legacy key is
+        // ignored.
+        dataStore.edit {
+            it[A11yPreferences.KEY_LEGACY_USE_OPEN_DYSLEXIC] = true
+            it[A11yPreferences.KEY_CLEAN_FONT_CHOICE] = CleanFontChoice.ANDIKA.storageKey
+        }
+        val resolved = A11yPreferences.resolveCleanFontChoice(dataStore.data.first())
+        assertEquals(
+            "When both keys are present, the v0.3 string key wins over the v0.2 legacy boolean.",
+            CleanFontChoice.ANDIKA,
+            resolved,
+        )
+    }
+
+    // -------------------------------------------------------------------------------------
+    // CleanFontChoice.fromStorageKey convenience
+    // -------------------------------------------------------------------------------------
+
+    @Test
+    fun fromStorageKey_roundTripsAllValues() {
+        for (choice in CleanFontChoice.values()) {
+            assertEquals(choice, CleanFontChoice.fromStorageKey(choice.storageKey))
+        }
+    }
+
+    @Test
+    fun fromStorageKey_returnsDefault_forNullOrUnknown() {
+        assertEquals(CleanFontChoice.DEFAULT, CleanFontChoice.fromStorageKey(null))
+        assertEquals(CleanFontChoice.DEFAULT, CleanFontChoice.fromStorageKey("not_a_real_font"))
+        assertEquals(CleanFontChoice.DEFAULT, CleanFontChoice.fromStorageKey(""))
+    }
+
+    @Test
+    fun resolveCleanFontChoice_isPure_onEmptyPrefs() = runTest {
+        // Empty prefs = neither the new key nor the legacy key has ever been written.
+        // The resolver must return DEFAULT and not throw.
+        val resolved = A11yPreferences.resolveCleanFontChoice(dataStore.data.first())
+        assertNotNull(resolved)
+        assertEquals(CleanFontChoice.DEFAULT, resolved)
     }
 }

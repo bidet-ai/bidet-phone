@@ -30,7 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +48,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
+import com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice
 import com.google.ai.edge.gallery.bidet.ingest.Tp3Sender
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -81,7 +82,7 @@ fun BidetSettingsScreen(
     var promptExpressiveOverride by remember { mutableStateOf("") }
     var webhookUrl by remember { mutableStateOf("") }
     var webhookKey by remember { mutableStateOf("") }
-    var useOpenDyslexic by remember { mutableStateOf(A11yPreferences.DEFAULT_USE_OPEN_DYSLEXIC) }
+    var cleanFontChoice by remember { mutableStateOf(A11yPreferences.DEFAULT_CLEAN_FONT_CHOICE) }
     var status by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -92,7 +93,7 @@ fun BidetSettingsScreen(
             prefs[BidetTabsViewModel.promptOverrideKey(SupportAxis.EXPRESSIVE)] ?: ""
         webhookUrl = prefs[KEY_WEBHOOK_URL] ?: ""
         webhookKey = prefs[KEY_WEBHOOK_KEY] ?: ""
-        useOpenDyslexic = A11yPreferences.isUseOpenDyslexicEnabled(context)
+        cleanFontChoice = A11yPreferences.getCleanFontChoice(context)
     }
 
     Column(
@@ -136,38 +137,62 @@ fun BidetSettingsScreen(
         Spacer(Modifier.height(12.dp))
         Divider()
 
-        // bidet-ai a11y (2026-05-10): OpenDyslexic font toggle for Clean-tab outputs.
-        // Default OFF. Persisted via [A11yPreferences] (DataStore-backed). Flipping the
-        // switch instantly updates the rendering on the Clean tabs because they observe the
-        // same flow. RAW transcript is unaffected by design.
+        // bidet-ai a11y (2026-05-10): "Font for cleaned text" radio picker.
+        // v0.3 — replaces the v0.2 single OpenDyslexic switch. Default flips to Atkinson
+        // Hyperlegible per the 2026-05-10 a11y audit. Persisted via [A11yPreferences]
+        // (DataStore-backed). Flipping a radio button instantly updates the rendering on
+        // BOTH Clean tabs because they observe the same flow. RAW transcript is unaffected
+        // by design — verbatim text is the source of truth, not a piece of UX to skin.
         Text(stringResource(R.string.bidet_settings_a11y_section))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Switch(
-                checked = useOpenDyslexic,
-                onCheckedChange = { newValue ->
-                    useOpenDyslexic = newValue
-                    scope.launch {
-                        A11yPreferences.setUseOpenDyslexic(context, newValue)
-                        status = if (newValue) {
-                            "OpenDyslexic font ON for cleaned text."
-                        } else {
-                            "OpenDyslexic font OFF (default app font)."
-                        }
-                    }
-                },
-            )
-            Text(
-                stringResource(R.string.bidet_settings_use_opendyslexic_label),
-                modifier = Modifier.padding(start = 12.dp),
-            )
-        }
+        Text(stringResource(R.string.bidet_settings_clean_font_label))
         Text(
-            stringResource(R.string.bidet_settings_use_opendyslexic_helper),
-            modifier = Modifier.padding(start = 4.dp),
+            stringResource(R.string.bidet_settings_clean_font_helper),
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 4.dp),
         )
+        // The radio group. Order matches the visual hierarchy in the spec:
+        //   1. System default
+        //   2. Atkinson Hyperlegible (DEFAULT)
+        //   3. OpenDyslexic
+        //   4. Andika
+        // Each row is the entire RadioButton + Column(label + per-font helper) so a tap
+        // anywhere on the row selects (touch-target accessibility).
+        for (choice in CleanFontChoice.values()) {
+            val labelRes = when (choice) {
+                CleanFontChoice.SYSTEM_DEFAULT -> R.string.bidet_settings_clean_font_system
+                CleanFontChoice.ATKINSON_HYPERLEGIBLE ->
+                    R.string.bidet_settings_clean_font_atkinson
+                CleanFontChoice.OPEN_DYSLEXIC -> R.string.bidet_settings_clean_font_opendyslexic
+                CleanFontChoice.ANDIKA -> R.string.bidet_settings_clean_font_andika
+            }
+            val helperRes = when (choice) {
+                CleanFontChoice.SYSTEM_DEFAULT ->
+                    R.string.bidet_settings_clean_font_system_helper
+                CleanFontChoice.ATKINSON_HYPERLEGIBLE ->
+                    R.string.bidet_settings_clean_font_atkinson_helper
+                CleanFontChoice.OPEN_DYSLEXIC ->
+                    R.string.bidet_settings_clean_font_opendyslexic_helper
+                CleanFontChoice.ANDIKA -> R.string.bidet_settings_clean_font_andika_helper
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = cleanFontChoice == choice,
+                    onClick = {
+                        cleanFontChoice = choice
+                        scope.launch {
+                            A11yPreferences.setCleanFontChoice(context, choice)
+                            status = "Font: ${choice.storageKey}"
+                        }
+                    },
+                )
+                Column(modifier = Modifier.padding(start = 8.dp)) {
+                    Text(stringResource(labelRes))
+                    Text(stringResource(helperRes))
+                }
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
         Divider()

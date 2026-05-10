@@ -37,30 +37,87 @@ val appFontFamily =
 
 val baseline = Typography()
 
+// bidet-ai a11y (2026-05-10): three bundled FontFamilies for the v0.3 Clean-tab font picker.
+// All three are SIL Open Font License v1.1; license texts live in `third_party/<font>/OFL.txt`.
+// The picker enum is [com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice]; the helper
+// [cleanTabBodyStyle] below maps a picker value to the TextStyle the Clean-tab Text nodes apply.
+//
+// Default is Atkinson Hyperlegible (Braille Institute) — stronger evidence base than
+// OpenDyslexic per the 2026-05-10 a11y audit. OpenDyslexic + Andika are user-selectable
+// alternates. "System default" leaves the Clean tab at Material's bodyMedium (with the app's
+// existing Nunito family) so it visibly differs from the picker fonts.
+
 /**
- * bidet-ai a11y (2026-05-10): OpenDyslexic font family for the optional dyslexia-friendly
- * Clean-tab rendering. License: SIL Open Font License v1.1 — see
- * `third_party/opendyslexic/OFL.txt` for the bundled license text. Source:
- * [opendyslexic.org](https://opendyslexic.org/).
- *
- * The font is bundled but only applied to Clean-tab output text when the user opts in via the
- * "Use OpenDyslexic font for cleaned text" setting (default OFF). RAW transcript rendering is
- * never re-styled — verbatim text stays in the default app typography.
+ * Atkinson Hyperlegible (Braille Institute, SIL OFL). See
+ * `third_party/atkinson_hyperlegible/README.md`.
  */
+val atkinsonHyperlegibleFontFamily =
+  FontFamily(
+    Font(R.font.atkinson_hyperlegible_regular, FontWeight.Normal),
+    Font(R.font.atkinson_hyperlegible_bold, FontWeight.Bold),
+    Font(
+      R.font.atkinson_hyperlegible_italic,
+      FontWeight.Normal,
+      androidx.compose.ui.text.font.FontStyle.Italic,
+    ),
+  )
+
+/** OpenDyslexic (SIL OFL). See `third_party/opendyslexic/README.md`. */
 val openDyslexicFontFamily =
   FontFamily(
     Font(R.font.opendyslexic_regular, FontWeight.Normal),
     Font(R.font.opendyslexic_bold, FontWeight.Bold),
-    Font(R.font.opendyslexic_italic, FontWeight.Normal, androidx.compose.ui.text.font.FontStyle.Italic),
+    Font(
+      R.font.opendyslexic_italic,
+      FontWeight.Normal,
+      androidx.compose.ui.text.font.FontStyle.Italic,
+    ),
   )
 
 /**
- * Body-text style for Clean-tab cached output when OpenDyslexic is toggled on. Matches the
- * default `bodyMedium` size/line-height baseline so toggling the font doesn't reflow the layout
- * dramatically — only the glyph shapes change.
+ * Andika (SIL International, SIL OFL). See `third_party/andika/README.md`. Substituted for
+ * Lexie Readable in the original v0.3 spec because Lexie's free terms forbid redistribution.
  */
-val cleanTabBody =
-  baseline.bodyMedium.copy(fontFamily = openDyslexicFontFamily)
+val andikaFontFamily =
+  FontFamily(
+    Font(R.font.andika_regular, FontWeight.Normal),
+    Font(R.font.andika_bold, FontWeight.Bold),
+    Font(R.font.andika_italic, FontWeight.Normal, androidx.compose.ui.text.font.FontStyle.Italic),
+  )
+
+/**
+ * Resolve a [CleanFontChoice] into the [androidx.compose.ui.text.TextStyle] that the Clean-tab
+ * Text nodes should apply. Always derives from `baseline.bodyMedium` so size + line-height
+ * stay consistent across choices and only the glyph shapes change when the user picks a
+ * different font — that keeps the layout from reflowing dramatically when the picker changes.
+ *
+ * For [CleanFontChoice.SYSTEM_DEFAULT] we return `bodyMedium` with the app's default Nunito
+ * family (the Material baseline the rest of the app uses). The Clean-tab Text nodes therefore
+ * always have an explicit `style =` and never depend on the implicit `LocalTextStyle`, which
+ * keeps the picker behavior predictable across Compose tree depths.
+ */
+fun cleanTabBodyStyle(choice: com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice) =
+  when (choice) {
+    com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice.SYSTEM_DEFAULT ->
+      baseline.bodyMedium.copy(fontFamily = appFontFamily)
+    com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice.ATKINSON_HYPERLEGIBLE ->
+      baseline.bodyMedium.copy(fontFamily = atkinsonHyperlegibleFontFamily)
+    com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice.OPEN_DYSLEXIC ->
+      baseline.bodyMedium.copy(fontFamily = openDyslexicFontFamily)
+    com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice.ANDIKA ->
+      baseline.bodyMedium.copy(fontFamily = andikaFontFamily)
+  }
+
+/**
+ * @deprecated v0.2 single-toggle style. Kept temporarily so a stray reference doesn't break
+ * the build during the v0.2 → v0.3 transition; use [cleanTabBodyStyle] with a
+ * [com.google.ai.edge.gallery.bidet.a11y.CleanFontChoice] instead.
+ */
+@Deprecated(
+  message = "Use cleanTabBodyStyle(CleanFontChoice) — v0.3 picker replaces the v0.2 OpenDyslexic toggle.",
+  replaceWith = ReplaceWith("cleanTabBodyStyle(CleanFontChoice.OPEN_DYSLEXIC)"),
+)
+val cleanTabBody = baseline.bodyMedium.copy(fontFamily = openDyslexicFontFamily)
 
 val AppTypography =
   Typography(
