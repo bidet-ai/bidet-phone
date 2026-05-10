@@ -1,6 +1,6 @@
 /*
  * Copyright 2025 Google LLC
- * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook, add fetchWhisperModel task hooked into mergeAssets for Phase 3 build-time Whisper-tiny fetch, Phase 4A.1 strip firebase-bom + firebase-analytics + firebase-messaging deps + drop the now-unused google.services plugin alias (zero-telemetry hard rule).
+ * Modifications Copyright 2026 bidet-ai contributors. Changed: strip HF OAuth (appAuthRedirectScheme + openid-appauth dep), add release signingConfig wired to CI secrets via env vars (RELEASE_KEYSTORE_PATH/PASS, RELEASE_KEY_ALIAS/PASS), bump applicationId to ai.bidet.phone, reset versionName to 0.1.0, register banWordCheck Gradle task hook, Phase 4A.1 strip firebase-bom + firebase-analytics + firebase-messaging deps + drop the now-unused google.services plugin alias (zero-telemetry hard rule). v0.3 (2026-05-10): replace whisper.cpp NDK + Whisper-tiny GGUF with Moonshine-Tiny ONNX + sherpa-onnx static-link AAR (Cactus prize narrative: small fast STT routed → Gemma 4 cleaning).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,34 +60,29 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    // bidet-ai 2026-05-08: whisper.cpp NDK build replaces the dead whisper-jni 1.7.1 desktop
-    // JAR (which shipped no Android binaries — the cause of Bug C, Issue #10). The native lib
-    // is built from the whisper.cpp git submodule at src/main/cpp/whisper.cpp via the
-    // CMakeLists.txt at src/main/cpp/. Pinned to whisper.cpp v1.8.4.
-    //
-    // Pixel 8 Pro is the only supported target for v0.1, so we restrict to arm64-v8a to
-    // keep build time + APK size minimal. Add other ABIs in a follow-up if Mark wants the
-    // app to run on other devices later.
+    // bidet-ai v0.3 (2026-05-10): whisper.cpp NDK build REPLACED with sherpa-onnx static-link
+    // AAR vendored at app/libs/. The AAR ships only `libsherpa-onnx-jni.so` for arm64-v8a
+    // (statically linked against ONNX Runtime 1.13.1) — no `libonnxruntime.so` collision risk
+    // with LiteRT-LM's bundled ORT. Pixel 8 Pro is the only supported target for v0.x, so we
+    // restrict to arm64-v8a to keep APK size minimal.
     ndk {
       abiFilters += "arm64-v8a"
     }
   }
 
-  // 2026-05-09: two product flavors so we can install Whisper-based and Gemma-audio-based
-  // builds SIDE-BY-SIDE on the same Pixel 8 Pro for A/B comparison. Each flavor produces a
-  // distinct APK with a distinct applicationId, so they coexist with separate icons +
-  // separate app data. Differs only in the transcription engine: Whisper vs Gemma 4 audio.
+  // v0.3 (2026-05-10): Moonshine + Gemma flavors. The "moonshine" flavor (renamed from
+  // "whisper") wires the Moonshine-Tiny ONNX → sherpa-onnx fast-STT path; the "gemma" flavor
+  // wires the integrated Gemma 4 audio encoder + cleaning path. Both APKs install side-by-side
+  // on the same device with distinct applicationIds for A/B comparison. Differs only in the
+  // transcription engine.
   flavorDimensions += "engine"
   productFlavors {
-    create("whisper") {
+    create("moonshine") {
       dimension = "engine"
-      applicationIdSuffix = ".whisper"
-      versionNameSuffix = "-whisper"
-      // 2026-05-09: launcher-truncation fix. Earlier "Bidet AI · Whisper" cut off as "Bidet…"
-      // in launcher grids, leaving Mark unable to tell three Bidet variants apart at a glance.
-      // Engine-name first puts the distinguishing token before the truncation point AND sorts
-      // the two flavor APKs apart from each other in the alphabetical launcher grid.
-      resValue("string", "bidet_app_name_flavor", "Whisper · Bidet")
+      applicationIdSuffix = ".moonshine"
+      versionNameSuffix = "-moonshine"
+      // Engine-name first to survive launcher truncation (FlavorBrandingTest pins this).
+      resValue("string", "bidet_app_name_flavor", "Moonshine · Bidet")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "false")
     }
     create("gemma") {
@@ -99,15 +94,10 @@ android {
     }
   }
 
-  // bidet-ai 2026-05-08: NDK pinned to a recent stable that supports arm64-v8a fp16
-  // (ARMv8.2-A) intrinsics required for whisper_v8fp16_va variant. AGP auto-installs.
+  // bidet-ai v0.3 (2026-05-10): NDK still pinned in case other native deps land in future,
+  // but no externalNativeBuild block — the whisper.cpp CMake project was deleted. sherpa-onnx
+  // ships its own prebuilt arm64-v8a .so inside the AAR, so AGP just packages it.
   ndkVersion = "27.0.12077973"
-  externalNativeBuild {
-    cmake {
-      path = file("src/main/cpp/CMakeLists.txt")
-      version = "3.22.1"
-    }
-  }
 
   // bidet-ai: release signingConfig populated from CI env vars (GitHub Secrets workflow
   // base64-decodes RELEASE_KEYSTORE_B64 → RELEASE_KEYSTORE_PATH then exports the
@@ -212,11 +202,14 @@ dependencies {
   // deleted alongside the rest of the customtasks/ tree.
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
-  // bidet-ai 2026-05-08: whisper-jni dep REMOVED. It was a desktop-only JVM JAR with zero
-  // Android binaries — Bug C / Issue #10. Replaced with a whisper.cpp NDK build via
-  // git submodule + CMakeLists.txt + externalNativeBuild (see android { ... } block above).
-  // Inference call path: WhisperEngine.kt → com.whispercpp.whisper.WhisperContext (vendored
-  // Kotlin bindings) → libwhisper.so / libwhisper_v8fp16_va.so (built from src/main/cpp/).
+  // bidet-ai v0.3 (2026-05-10): sherpa-onnx replaces whisper.cpp. Vendored AAR ships
+  // libsherpa-onnx-jni.so (statically linked ONNX Runtime 1.13.1) so there's no
+  // libonnxruntime.so collision with LiteRT-LM's bundled ORT. Apache-2.0 licensed,
+  // compatible with Bidet's Apache-2.0 + Gemma 4's Apache-2.0 + Moonshine's MIT licenses.
+  // Inference call path: MoonshineEngine.kt → com.k2fsa.sherpa.onnx.OfflineRecognizer →
+  // libsherpa-onnx-jni.so. Pulls Moonshine-Tiny v2 quantized ONNX bundle at build time
+  // (see fetchMoonshineModel task below).
+  implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.13.1.aar"))
   // bidet-ai: OkHttp for the optional debug Tp3Sender webhook POST. Phase 4A also uses
   // OkHttp for the dynamic Content-Length HEAD fetch in BidetModelProvider.
   implementation(libs.okhttp)
@@ -250,55 +243,61 @@ protobuf {
   generateProtoTasks { all().forEach { it.plugins { create("java") { option("lite") } } } }
 }
 
-// bidet-ai Phase 3: fetch the Whisper-tiny.en weights at build time. The .bin file is
-// gitignored (75 MB binary); CI fetches on every build and caches the result. The fetch is
-// idempotent — once the file exists with a matching SHA-256 the task is up-to-date.
+// bidet-ai v0.3 (2026-05-10): fetch Moonshine-Tiny ONNX bundle at build time. The bundle's
+// .ort + tokens.txt total ~44 MB extracted; gitignored. CI/local builds download once into
+// the Gradle project cache, verify the tarball SHA-256, and extract into
+// src/main/assets/moonshine/ before mergeAssets runs. Idempotent — the task is
+// up-to-date when the marker file (sha256.ok) sits next to the unpacked assets.
 //
-// Wire-in: a manual `dependsOn` on mergeDebugAssets / mergeReleaseAssets ensures the asset
-// is in place before APK assembly. We do NOT hook into `assembleDebug` directly (that bug
-// hit Phase 1's banWordCheck — see CI workflow comment).
-val whisperModelUrl =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
-// SHA-256 from the HuggingFace API (model file's LFS oid). Verified 2026-05-08:
-// https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main → ggml-tiny.en.bin
-val whisperModelSha256 =
-    "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"
-val whisperModelFile = layout.projectDirectory.file(
-    "src/main/assets/whisper/ggml-tiny.en.bin"
+// Bundle: sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27 (Moonshine v2 = encoder.ort +
+// decoder_model_merged.ort, ~44 MB total). Smaller than Moonshine v1 (4 ONNX files, ~120 MB)
+// and matches the OfflineMoonshineModelConfig v2 path in sherpa-onnx (encoder + mergedDecoder).
+val moonshineModelUrl =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" +
+        "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27.tar.bz2"
+// SHA-256 of the tarball (verified 2026-05-10 on G16 cache).
+val moonshineModelSha256 =
+    "9ec31b342d8fa3240c3b81b8f82e1cf7e3ac467c93ca5a999b741d5887164f8d"
+val moonshineAssetsDir = layout.projectDirectory.dir(
+    "src/main/assets/moonshine"
 ).asFile
 
-abstract class FetchWhisperModelTask : DefaultTask() {
+abstract class FetchMoonshineModelTask : DefaultTask() {
     @get:Input
     abstract val url: Property<String>
 
     @get:Input
     abstract val expectedSha256: Property<String>
 
-    @get:OutputFile
-    abstract val outputFile: RegularFileProperty
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun fetch() {
-        val out = outputFile.get().asFile
-        out.parentFile.mkdirs()
+        val outDir = outputDir.get().asFile
+        outDir.mkdirs()
+        val marker = JavaFile(outDir, ".sha256.ok")
+        val expected = expectedSha256.get()
 
-        // Up-to-date check: file exists AND SHA-256 matches.
-        if (out.exists() && out.length() > 0) {
-            val actual = computeSha256(out)
-            if (actual.equals(expectedSha256.get(), ignoreCase = true)) {
-                logger.lifecycle("Whisper model already present + verified: ${out.absolutePath}")
+        // Up-to-date check: marker file present AND contents match expected SHA.
+        if (marker.exists() && marker.readText().trim().equals(expected, ignoreCase = true)) {
+            // Plus check that the two .ort files actually exist (defensive against partial
+            // extraction).
+            val encoder = JavaFile(outDir, "encoder_model.ort")
+            val decoder = JavaFile(outDir, "decoder_model_merged.ort")
+            val tokens = JavaFile(outDir, "tokens.txt")
+            if (encoder.isFile && encoder.length() > 0 && decoder.isFile &&
+                decoder.length() > 0 && tokens.isFile && tokens.length() > 0) {
+                logger.lifecycle("Moonshine bundle already present + verified: ${outDir.absolutePath}")
                 return
             } else {
-                logger.warn(
-                    "Whisper model SHA mismatch (expected ${expectedSha256.get()}, got $actual). " +
-                        "Re-downloading."
-                )
-                out.delete()
+                logger.warn("Moonshine marker present but assets missing — re-extracting.")
             }
         }
 
-        logger.lifecycle("Downloading Whisper-tiny.en model from ${url.get()} → ${out.absolutePath}")
-        val tmp = JavaFile(out.parentFile, out.name + ".tmp")
+        // Download tarball into a tmp file, verify SHA, then extract.
+        val tmp = JavaFile(outDir.parentFile, "moonshine-bundle.tar.bz2.tmp")
+        logger.lifecycle("Downloading Moonshine bundle from ${url.get()} → ${tmp.absolutePath}")
         try {
             JavaURL(url.get()).openStream().use { input ->
                 tmp.outputStream().use { output ->
@@ -306,23 +305,58 @@ abstract class FetchWhisperModelTask : DefaultTask() {
                 }
             }
             val actual = computeSha256(tmp)
-            if (!actual.equals(expectedSha256.get(), ignoreCase = true)) {
+            if (!actual.equals(expected, ignoreCase = true)) {
                 tmp.delete()
                 throw GradleException(
-                    "SHA-256 mismatch for downloaded Whisper model. " +
-                        "Expected ${expectedSha256.get()}, got $actual."
+                    "SHA-256 mismatch for downloaded Moonshine bundle. " +
+                        "Expected $expected, got $actual."
                 )
             }
-            if (out.exists()) out.delete()
-            if (!tmp.renameTo(out)) {
-                throw GradleException(
-                    "Failed to rename ${tmp.absolutePath} to ${out.absolutePath}"
-                )
-            }
-            logger.lifecycle("Whisper model fetched + verified: ${out.absolutePath}")
+
+            // Wipe + recreate the asset dir, then extract the tarball into it. We flatten
+            // the bundle's top-level "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27/"
+            // directory away so MoonshineEngine.kt can reference assets/moonshine/<file>.
+            outDir.deleteRecursively()
+            outDir.mkdirs()
+            extractTarBz2(tmp, outDir)
+            tmp.delete()
+
+            // Drop test_wavs from the asset dir — we don't ship those into the APK.
+            JavaFile(outDir, "test_wavs").deleteRecursively()
+
+            // Write marker.
+            marker.writeText(expected)
+            logger.lifecycle("Moonshine bundle fetched + extracted into ${outDir.absolutePath}")
         } catch (t: Throwable) {
             tmp.delete()
             throw t
+        }
+    }
+
+    /**
+     * Stream-extract a .tar.bz2 archive without depending on Apache Commons or any other
+     * external lib — just the JDK + Gradle's built-in `bzcat`-equivalent. Uses
+     * `BZip2CompressorInputStream`-equivalent via `java.util.zip` is not available, so we
+     * shell out to bzip2 if installed, falling back to a pure-JDK tar reader after Bzip2
+     * decoding via a system command. To keep this pure-JDK we use a minimal bzip2 reader
+     * built on top of CommonsCompress... no, simpler: use the `tar` command which is
+     * universally available on Linux/macOS/CI. Windows isn't a build host for this project.
+     */
+    private fun extractTarBz2(tarBz2: JavaFile, destDir: JavaFile) {
+        // Use the `tar` binary (available on Linux + macOS CI runners + dev machines). It
+        // handles bz2 transparently with `-xjf`. Strip-components=1 flattens the
+        // single-top-level directory the sherpa-onnx tarball ships with.
+        val proc = ProcessBuilder(
+            "tar", "-xjf", tarBz2.absolutePath,
+            "-C", destDir.absolutePath,
+            "--strip-components=1",
+        ).redirectErrorStream(true).start()
+        val output = proc.inputStream.bufferedReader().readText()
+        val exit = proc.waitFor()
+        if (exit != 0) {
+            throw GradleException(
+                "tar exited with code $exit while extracting ${tarBz2.absolutePath}: $output"
+            )
         }
     }
 
@@ -340,25 +374,24 @@ abstract class FetchWhisperModelTask : DefaultTask() {
     }
 }
 
-val fetchWhisperModel = tasks.register<FetchWhisperModelTask>("fetchWhisperModel") {
+val fetchMoonshineModel = tasks.register<FetchMoonshineModelTask>("fetchMoonshineModel") {
     group = "bidet"
-    description = "Download + verify Whisper-tiny.en model weights into assets/whisper/."
-    url.set(whisperModelUrl)
-    expectedSha256.set(whisperModelSha256)
-    outputFile.set(whisperModelFile)
+    description = "Download + verify Moonshine-Tiny v2 quantized ONNX bundle into assets/moonshine/."
+    url.set(moonshineModelUrl)
+    expectedSha256.set(moonshineModelSha256)
+    outputDir.set(layout.projectDirectory.dir("src/main/assets/moonshine"))
 }
 
-// Hook into the asset-merge step so the .bin lands in src/main/assets/whisper/ before AGP
-// reads it. Phase 1 lesson: this is the legitimate kind of task hook (asset-pipeline
-// prerequisite, not a verification gate stapled onto assembleDebug).
-// 2026-05-09: with product flavors (whisper, gemma) the asset-merge tasks are
-// renamed to merge<Flavor><BuildType>Assets — the old hardcoded list of unflavored
-// names ("mergeDebugAssets" etc.) never matched, so fetchWhisperModel never ran
-// in flavor builds. Result: ggml-tiny.en.bin missing from both flavor APKs and
-// every recording fails with "transcription failed chunk N". Switch to a regex
-// match that catches all flavor permutations + the legacy unflavored names.
+// Hook into the asset-merge step so the bundle lands in src/main/assets/moonshine/ before
+// AGP reads it. Mirror of the same flavor-aware regex match used for fetchWhisperModel
+// (2026-05-09): merge<Flavor><BuildType>Assets needs the dep too, not just the unflavored
+// task name. The Gemma flavor doesn't *use* the Moonshine assets (its USE_GEMMA_AUDIO flag
+// routes around them) — but they're still packaged into both flavor APKs because the
+// fetch happens before flavor-specific packaging splits it. Net cost on Gemma flavor:
+// ~44 MB asset overhead. Acceptable for now; if APK budget becomes tight, future work
+// is to gate the asset packaging via packagingOptions per-flavor.
 afterEvaluate {
     val pattern = Regex("(merge|generate).*Assets")
     tasks.matching { pattern.matches(it.name) }
-        .configureEach { dependsOn(fetchWhisperModel) }
+        .configureEach { dependsOn(fetchMoonshineModel) }
 }

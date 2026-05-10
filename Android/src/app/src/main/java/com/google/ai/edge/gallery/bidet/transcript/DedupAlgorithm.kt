@@ -17,7 +17,8 @@
 package com.google.ai.edge.gallery.bidet.transcript
 
 /**
- * The one defined dedup algorithm for stitching consecutive Whisper-tiny chunks together.
+ * The one defined dedup algorithm for stitching consecutive ASR chunks together (Moonshine
+ * on the moonshine flavor; Gemma audio on the gemma flavor).
  *
  * Each chunk emitted by [com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine] overlaps
  * the previous chunk's tail by ~2 seconds, which protects the ASR from cutting words in half.

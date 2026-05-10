@@ -209,11 +209,11 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
      * [state] == [EngineState.Ready] so a slow phone shows "Loading local AI…" instead of
      * a broken record tap.
      *
-     * On the whisper flavor this path is unused (the whisper engine doesn't go through the
-     * shared LiteRT-LM provider). The [com.google.ai.edge.gallery.GalleryApplication] checks
-     * `BuildConfig.USE_GEMMA_AUDIO` and skips the call there, but this method is also safe
-     * to invoke on the whisper flavor — it just incurs a no-op model-file check the first
-     * time and then either reuses or rebuilds.
+     * On the moonshine flavor this path is unused (the moonshine engine doesn't go through
+     * the shared LiteRT-LM provider). The [com.google.ai.edge.gallery.GalleryApplication]
+     * checks `BuildConfig.USE_GEMMA_AUDIO` and skips the call there, but this method is also
+     * safe to invoke on the moonshine flavor — it just incurs a no-op model-file check the
+     * first time and then either reuses or rebuilds.
      *
      * We pre-warm with `requireAudio = true` and `maxNumTokens = MAX_OUTPUT_TOKENS_PREWARM`
      * because the gemma flavor's ONLY entry from the welcome Record button goes through
@@ -597,7 +597,8 @@ class BidetSharedLiteRtEngineProvider @VisibleForTesting internal constructor(
 
         /**
          * Whether app-launch prewarm should run for this build. Gates on the Gradle product
-         * flavor: only the gemma flavor uses LiteRT-LM, the whisper flavor uses whisper.cpp.
+         * flavor: only the gemma flavor uses LiteRT-LM, the moonshine flavor uses sherpa-onnx
+         * (which has its own much-cheaper init path; no app-launch prewarm needed).
          * Exposed via the companion so [com.google.ai.edge.gallery.GalleryApplication] can
          * decide whether to launch the prewarm coroutine without depending on [BuildConfig]
          * itself (keeps the Application class small).

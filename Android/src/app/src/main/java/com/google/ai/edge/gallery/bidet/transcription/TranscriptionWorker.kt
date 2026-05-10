@@ -34,8 +34,8 @@ import kotlinx.coroutines.withContext
  *
  * Behaviour per brief §4:
  *  - Reads from [chunkQueue.asFlow()] one chunk at a time.
- *  - For [Chunk.Audio]: convert int16 PCM → Float32, hand to [WhisperEngine.transcribe], then
- *    [TranscriptAggregator.append] the result.
+ *  - For [Chunk.Audio]: convert int16 PCM → Float32, hand to [TranscriptionEngine.transcribe],
+ *    then [TranscriptAggregator.append] the result.
  *  - For [Chunk.MarkerLost]: emit a failure marker to the aggregator (we lost audio for that
  *    index and can't transcribe it).
  *  - On any per-chunk exception: log + appendFailureMarker, then continue (a single bad chunk
@@ -120,7 +120,7 @@ class TranscriptionWorker(
      *    [handleAudio] wraps its [TranscriptionEngine.transcribe] call in
      *    `withContext(NonCancellable + Dispatchers.Default)`, so a transcribe that started
      *    before Stop keeps running. The next line — `transcriptionEngine.close()` — yanks
-     *    the native pointer out from under the still-running whisper.cpp / LiteRT-LM
+     *    the native pointer out from under the still-running sherpa-onnx / LiteRT-LM
      *    call, classic use-after-free. On a real device the failure mode is "user taps
      *    Stop mid-transcribe → app dies + ANR". Bad demo crash.
      *
@@ -154,14 +154,15 @@ class TranscriptionWorker(
     private suspend fun handleAudio(chunk: Chunk.Audio) {
         Log.w(TAG, "handleAudio ENTER idx=${chunk.idx} bytes=${chunk.bytes.size}")
         // 2026-05-09: wrap in NonCancellable so that when the user taps Stop, an
-        // already-in-flight whisper_full call (which can take a few seconds even
-        // optimized) gets to finish and write its result to the aggregator/DB.
-        // Before this, stop → scope.cancel() → JobCancellationException mid-transcribe
-        // → empty rawText. With NonCancellable the transcribe and the aggregator
-        // append both complete; only the *next* chunk would be skipped.
+        // already-in-flight transcribe call (sherpa-onnx OfflineRecognizer.decode) gets to
+        // finish and write its result to the aggregator/DB. Before this, stop → scope.cancel()
+        // → JobCancellationException mid-transcribe → empty rawText. With NonCancellable the
+        // transcribe and the aggregator append both complete; only the *next* chunk would be
+        // skipped.
         //
-        // Heavy lifting (Whisper) is CPU-bound — push onto Dispatchers.Default so we
-        // don't compete with the audio capture loop for a single thread.
+        // Heavy lifting (Moonshine ASR or Gemma audio decode) is CPU-bound — push onto
+        // Dispatchers.Default so we don't compete with the audio capture loop for a single
+        // thread.
         val text = withContext(NonCancellable + Dispatchers.Default) {
             val floatPcm = transcriptionEngine.int16ToFloat32(chunk.bytes)
             transcriptionEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
@@ -182,7 +183,7 @@ class TranscriptionWorker(
 
         /**
          * Sample rate guarantee from [com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine].
-         * Whisper requires 16 kHz; pinned here for clarity.
+         * Both Moonshine (via sherpa-onnx) and Gemma 4 audio require 16 kHz; pinned here.
          */
         const val AudioCaptureSampleRate: Int = 16_000
     }

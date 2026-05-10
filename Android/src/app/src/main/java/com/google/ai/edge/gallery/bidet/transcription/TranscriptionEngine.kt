@@ -20,8 +20,11 @@ import dagger.hilt.components.SingletonComponent
 
 /**
  * Common surface for any speech-to-text engine. Two implementations exist:
- *  - [WhisperEngine]      — whisper.cpp NDK + ggml-tiny.en
- *  - [GemmaAudioEngine]   — Gemma 4 E4B's built-in audio encoder via LiteRT-LM
+ *  - [MoonshineEngine]    — Moonshine-Tiny ONNX via sherpa-onnx (replaced WhisperEngine
+ *                            in v0.3 — smaller, faster, more accurate; routed-STT story for
+ *                            the Cactus prize).
+ *  - [GemmaAudioEngine]   — Gemma 4 E4B's built-in audio encoder via LiteRT-LM (single-model
+ *                            integrated path; demo's "Gemma everywhere" narrative).
  *
  * Selected per Gradle product flavor via [BuildConfig.USE_GEMMA_AUDIO]. Both APKs are
  * installable side-by-side on the same device with distinct applicationIds for A/B
@@ -50,8 +53,11 @@ interface TranscriptionEngine {
      * previous sync contract forced [GemmaAudioEngine] to block on a
      * [java.util.concurrent.CountDownLatch], which pinned a Default-dispatcher thread for
      * up to 60 s and never propagated coroutine cancellation down to LiteRT-LM.
-     * [WhisperEngine] satisfies the suspend contract via
-     * [com.whispercpp.whisper.WhisperContext.transcribeData] (already suspend upstream).
+     * [MoonshineEngine] satisfies the suspend contract by wrapping the synchronous
+     * sherpa-onnx [com.k2fsa.sherpa.onnx.OfflineRecognizer.decode] call in
+     * `withContext(Dispatchers.Default)` (the decode itself is fast — typically 100-300 ms
+     * per chunk on Pixel 8 Pro CPU — so we don't need cancellation propagation the way
+     * GemmaAudioEngine does).
      *
      * @param floatPcm Float32 mono samples in the range [-1.0, 1.0].
      * @param sampleRateHz Audio sample rate in Hz. Both engines require 16 kHz.
@@ -99,7 +105,7 @@ interface TranscriptionEngine {
                 ).sharedEngineProvider()
                 GemmaAudioEngine(context.applicationContext, provider)
             } else {
-                WhisperEngine(context)
+                MoonshineEngine(context)
             }
     }
 

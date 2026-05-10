@@ -65,11 +65,11 @@ abstract class BanWordCheckTask : org.gradle.api.DefaultTask() {
                 assets.walkTopDown()
                     .filter { it.isFile && it.extension.lowercase() in setOf("txt", "md", "json", "xml", "html", "js", "ts") }
                     // assets/prompts/ feeds Gemma directly, not the user. Exempt by design.
-                    // assets/whisper/ holds the model bin (excluded by extension filter, but be
-                    // explicit).
+                    // assets/moonshine/ holds the Moonshine ONNX bundle + tokens.txt
+                    // (BPE vocab — not user-visible English text). Exempt explicitly.
                     .filter { f ->
                         val rel = f.relativeTo(assets).path.replace(java.io.File.separatorChar, '/')
-                        !rel.startsWith("prompts/") && !rel.startsWith("whisper/")
+                        !rel.startsWith("prompts/") && !rel.startsWith("moonshine/")
                     }
                     .toList()
             )
