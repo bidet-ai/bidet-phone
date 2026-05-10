@@ -108,10 +108,19 @@ class LiteRtBidetGemmaClient @Inject constructor(
         // Build / rebuild the conversation under a mutex so concurrent tab generations don't
         // race the LiteRT-LM Conversation lifecycle.
         val activeConversation = initMutex.withLock {
+            // The engine's maxNumTokens is the TOTAL context budget (prefill input + decoded
+            // output), and per BidetSharedLiteRtEngineProvider#acquire kdoc, the value is
+            // taken from the FIRST acquire and stays for the lifetime of the engine. On the
+            // moonshine flavor the audio prewarm doesn't run (it's gated on USE_GEMMA_AUDIO),
+            // so cleaning is the only acquirer — passing maxOutputTokens here capped the
+            // engine at 2048 and surfaced as "input token IDs are too long, 3468 > 2048" on
+            // long RAW dumps. Pass a generous fixed budget instead so the engine can hold
+            // typical RAW + cleaning output in a single call. 8192 covers ~5,000-char RAW
+            // single-shot and is well below the 16384 used by gemma-flavor prewarm.
             val engine = try {
                 sharedEngineProvider.acquire(
                     requireAudio = false,
-                    maxNumTokens = maxOutputTokens,
+                    maxNumTokens = ENGINE_CONTEXT_BUDGET,
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "shared engine acquire failed", t)
@@ -192,6 +201,16 @@ class LiteRtBidetGemmaClient @Inject constructor(
         // upstream Gallery's defaults (DEFAULT_TOPK=40, DEFAULT_TOPP=0.95).
         private const val DEFAULT_TOPK: Int = 40
         private const val DEFAULT_TOPP: Float = 0.95f
+
+        /**
+         * Total context budget the LiteRT-LM Engine is built with. Sized to hold a typical
+         * RAW dump (~5,000 chars ≈ 1,400 tokens) plus a 2,048-token cleaning output plus
+         * ~700 tokens of system prompt without the per-call prefill+decode budget tripping
+         * the engine's "input token IDs are too long" guard. The gemma-flavor prewarm uses
+         * 16384; we stay at half that to keep KV cache memory bounded on Pixel 8 Pro
+         * (~500 MB additional for E4B at 8192 vs 2048).
+         */
+        private const val ENGINE_CONTEXT_BUDGET: Int = 8192
     }
 }
 

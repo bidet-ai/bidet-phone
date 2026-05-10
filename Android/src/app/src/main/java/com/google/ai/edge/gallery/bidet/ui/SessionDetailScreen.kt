@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -124,6 +125,12 @@ fun SessionDetailScreen(
                 },
                 actions = {
                     if (session?.audioWavPath != null) {
+                        IconButton(onClick = { copyWavToDownloads(context, session) }) {
+                            Icon(
+                                imageVector = Icons.Filled.FileDownload,
+                                contentDescription = "Save WAV to Downloads",
+                            )
+                        }
                         IconButton(onClick = { exportWav(context, session) }) {
                             Icon(
                                 imageVector = Icons.Filled.Share,

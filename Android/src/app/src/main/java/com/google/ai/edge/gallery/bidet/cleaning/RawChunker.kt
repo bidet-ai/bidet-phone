@@ -101,8 +101,15 @@ object RawChunker {
         return parts
     }
 
-    /** Conservative budget: 2048 ctx - 1024 output - ~300 system prompt = ~700 input tokens ≈ 2400 chars. */
-    const val DEFAULT_MAX_CHARS: Int = 2400
+    /**
+     * With the LiteRT-LM Engine now built at 8192-token total context budget (see
+     * [com.google.ai.edge.gallery.bidet.ui.LiteRtBidetGemmaClient]'s ENGINE_CONTEXT_BUDGET),
+     * each call has 8192 - 2048 (single-shot output) - ~700 (system prompt) ≈ 5,400 input
+     * tokens of headroom ≈ 18,000 chars. We chunk at 8,000 chars (~2,300 input tokens) to
+     * single-shot anything up to ~13-min dumps and to keep cushion for the cleaning prompt
+     * itself (which appends the "part N of M" annotation when chunking).
+     */
+    const val DEFAULT_MAX_CHARS: Int = 8000
 
     /** Small bridge between windows so cleaning sees the end of the previous thought. */
     const val DEFAULT_OVERLAP_CHARS: Int = 200
