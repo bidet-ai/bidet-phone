@@ -21,8 +21,8 @@ import android.util.Log
 import com.google.ai.edge.gallery.bidet.llm.BidetSharedLiteRtEngineProvider
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
-import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
@@ -64,6 +64,16 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * [BidetSharedLiteRtEngineProvider] — same engine the chat-tab generation uses. Two engines
  * pointing at the same 3.6 GB model file is the demo-OOM scenario we're closing.
  *
+ * 2026-05-09 (fresh-conversation fix): each call to [transcribe] creates its OWN
+ * [com.google.ai.edge.litertlm.Conversation] off the shared engine, sends one
+ * `(AudioBytes, Text)` turn, then closes it. Symptom of the prior single-shared-Conversation
+ * design: chunk 0 transcribes correctly, chunks 1+ silently empty due to LiteRT-LM
+ * Conversation accumulating history across `sendMessageAsync` calls — by chunk 1 the
+ * conversation already contains `[system, audio_0, text_0, "Transcribe..."]` and the model
+ * treats the second send as a continuation, emitting stop tokens immediately. Conversations
+ * are cheap (session-state on top of the warm engine); the shared Engine stays warm across
+ * chunks so this does NOT reload the 3.6 GB model.
+ *
  * F3.4 (2026-05-09): [transcribe] is now `suspend` and uses
  * [suspendCancellableCoroutine] + `cont.invokeOnCancellation { conv.cancelProcess() }`
  * instead of [java.util.concurrent.CountDownLatch]. The latch was not coroutine-cancel-aware
@@ -94,20 +104,21 @@ class GemmaAudioEngine @Inject constructor(
 ) : TranscriptionEngine {
 
     /**
-     * Live conversation off the shared engine. We create one and reuse it across chunks
-     * (one Conversation = one stateful audio stream from Gemma's POV; per turn we send a
-     * fresh AudioBytes + Text Contents pair). Provider owns the Engine; we own the
-     * Conversation lifetime.
+     * 2026-05-09 fix: hold the shared LiteRT-LM [Engine] reference, NOT a long-lived
+     * Conversation. Each [transcribe] call now spins up a fresh Conversation, sends one
+     * `(AudioBytes, Text)` turn, and closes it. See [transcribe] for why.
+     *
+     * Provider owns the Engine lifecycle; we just cache the handle so [transcribe] doesn't
+     * have to take the provider mutex on every chunk.
      */
-    private val conversationRef = AtomicReference<Conversation?>(null)
+    private val engineRef = AtomicReference<Engine?>(null)
 
     /**
-     * True once the LiteRT-LM Engine + Conversation are alive. We don't peek at the engine
-     * directly — the provider owns engine lifecycle. Conversation presence is sufficient
-     * (the provider can't hand us a conversation off a dead engine).
+     * True once we've successfully acquired the shared LiteRT-LM Engine. Engine presence is
+     * sufficient — Conversations are now created per-chunk in [transcribe].
      */
     override val isReady: Boolean
-        get() = conversationRef.get() != null
+        get() = engineRef.get() != null
 
     @Synchronized
     override fun initialize(): Boolean {
@@ -129,25 +140,7 @@ class GemmaAudioEngine @Inject constructor(
                     maxNumTokens = MAX_OUTPUT_TOKENS,
                 )
             }
-            val conv = engine.createConversation(
-                ConversationConfig(
-                    // 2026-05-09 fix: temperature=0.0 with topK/topP set is mathematically
-                    // incoherent (greedy/argmax + nucleus sampling) and some LiteRT-LM
-                    // sampler paths divide-by-zero on it. For verbatim transcription we
-                    // want effectively-deterministic output without the degenerate edge
-                    // case — temperature=0.05 is the standard "low entropy, well defined"
-                    // setting. The chat client uses 0.4+; we stay much lower because
-                    // creative sampling on transcription introduces hallucinated words.
-                    samplerConfig = SamplerConfig(
-                        topK = 40,
-                        topP = 0.95,
-                        temperature = TRANSCRIBE_TEMPERATURE,
-                    ),
-                    systemInstruction = Contents.of(SYSTEM_PROMPT),
-                    tools = emptyList(),
-                )
-            )
-            conversationRef.set(conv)
+            engineRef.set(engine)
             Log.i(TAG, "initialize: Gemma 4 audio engine ready (shared LiteRT-LM engine)")
             true
         } catch (t: Throwable) {
@@ -167,7 +160,7 @@ class GemmaAudioEngine @Inject constructor(
         require(sampleRateHz == 16_000) {
             "GemmaAudioEngine requires 16 kHz input, got $sampleRateHz"
         }
-        val conv = conversationRef.get()
+        val engine = engineRef.get()
             ?: throw IllegalStateException("GemmaAudioEngine not initialized")
 
         // F5.1 fix (2026-05-09): keep the LAST 30 s of samples, not the first 30 s.
@@ -191,66 +184,95 @@ class GemmaAudioEngine @Inject constructor(
         // off to LiteRT-LM. See [float32ToWavBytes] kdoc + class-level kdoc for why.
         val wavBytes = float32ToWavBytes(samples, sampleRateHz)
 
-        return suspendCancellableCoroutine { cont ->
-            val sb = StringBuilder()
-            val callback = object : MessageCallback {
-                override fun onMessage(message: Message) {
-                    sb.append(message.toString())
+        // 2026-05-09 fix: fresh Conversation per chunk. Symptom: chunk 0 transcribes
+        // correctly, chunks 1+ silently empty due to LiteRT-LM Conversation accumulating
+        // history across `sendMessageAsync` calls — by chunk 1 the conversation already
+        // contains [system, audio_0, text_0, "Transcribe..."] and the model treats the
+        // next send as a continuation, emitting stop tokens immediately. Each chunk needs
+        // a clean slate. The shared Engine stays warm across chunks (no model reload);
+        // only the per-turn Conversation is recreated.
+        val conv = engine.createConversation(
+            ConversationConfig(
+                // 2026-05-09 fix: temperature=0.0 with topK/topP set is mathematically
+                // incoherent (greedy/argmax + nucleus sampling) and some LiteRT-LM
+                // sampler paths divide-by-zero on it. For verbatim transcription we
+                // want effectively-deterministic output without the degenerate edge
+                // case — temperature=0.05 is the standard "low entropy, well defined"
+                // setting. The chat client uses 0.4+; we stay much lower because
+                // creative sampling on transcription introduces hallucinated words.
+                samplerConfig = SamplerConfig(
+                    topK = 40,
+                    topP = 0.95,
+                    temperature = TRANSCRIBE_TEMPERATURE,
+                ),
+                systemInstruction = Contents.of(SYSTEM_PROMPT),
+                tools = emptyList(),
+            )
+        )
+
+        try {
+            return suspendCancellableCoroutine { cont ->
+                val sb = StringBuilder()
+                val callback = object : MessageCallback {
+                    override fun onMessage(message: Message) {
+                        sb.append(message.toString())
+                    }
+                    override fun onDone() {
+                        if (cont.isActive) cont.resume(sb.toString().trim())
+                    }
+                    override fun onError(throwable: Throwable) {
+                        Log.e(TAG, "transcribe: Gemma audio onError: ${throwable.message}", throwable)
+                        // Empty string mirrors the legacy contract: an onError for a 30-s
+                        // window is a soft-fail (transient GPU glitch, etc.) — the session
+                        // should continue rather than poison the aggregator with a failure
+                        // marker every time.
+                        if (cont.isActive) cont.resume("")
+                    }
                 }
-                override fun onDone() {
-                    if (cont.isActive) cont.resume(sb.toString().trim())
-                }
-                override fun onError(throwable: Throwable) {
-                    Log.e(TAG, "transcribe: Gemma audio onError: ${throwable.message}", throwable)
-                    // Empty string mirrors the legacy contract: an onError for a 30-s
-                    // window is a soft-fail (transient GPU glitch, etc.) — the session
-                    // should continue rather than poison the aggregator with a failure
-                    // marker every time.
+                try {
+                    conv.sendMessageAsync(
+                        Contents.of(
+                            listOf(
+                                Content.AudioBytes(wavBytes),
+                                Content.Text(
+                                    "Transcribe the speech verbatim. Output only the transcription, no commentary.",
+                                ),
+                            )
+                        ),
+                        callback,
+                        emptyMap(),
+                    )
+                } catch (t: Throwable) {
+                    Log.e(TAG, "transcribe: sendMessageAsync threw: ${t.message}", t)
                     if (cont.isActive) cont.resume("")
                 }
-            }
-            try {
-                conv.sendMessageAsync(
-                    Contents.of(
-                        listOf(
-                            Content.AudioBytes(wavBytes),
-                            Content.Text(
-                                "Transcribe the speech verbatim. Output only the transcription, no commentary.",
-                            ),
-                        )
-                    ),
-                    callback,
-                    emptyMap(),
-                )
-            } catch (t: Throwable) {
-                Log.e(TAG, "transcribe: sendMessageAsync threw: ${t.message}", t)
-                if (cont.isActive) cont.resume("")
-            }
 
-            cont.invokeOnCancellation {
-                // F3.4 fix (2026-05-09): on coroutine cancellation, free the underlying
-                // LiteRT-LM compute so we don't keep burning GPU after the user tapped
-                // Stop. Previously the latch sat there for up to 60 s pinning a thread.
-                try {
-                    conv.cancelProcess()
-                } catch (t: Throwable) {
-                    Log.w(TAG, "cancelProcess threw on coroutine cancellation", t)
+                cont.invokeOnCancellation {
+                    // F3.4 fix (2026-05-09): on coroutine cancellation, free the underlying
+                    // LiteRT-LM compute so we don't keep burning GPU after the user tapped
+                    // Stop. Previously the latch sat there for up to 60 s pinning a thread.
+                    try {
+                        conv.cancelProcess()
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "cancelProcess threw on coroutine cancellation", t)
+                    }
                 }
+            }
+        } finally {
+            try { conv.close() } catch (t: Throwable) {
+                Log.w(TAG, "transcribe: per-chunk conversation.close threw", t)
             }
         }
     }
 
     @Synchronized
     override fun close() {
-        // F3.2 (2026-05-09): close the conversation only. The Engine is owned by
+        // 2026-05-09 fix: drop our cached Engine reference only. The Engine is owned by
         // [BidetSharedLiteRtEngineProvider] — closing it here would yank the model out
-        // from under the chat client (BidetGemmaClient) too. Provider releases the engine
-        // on process death.
-        try {
-            conversationRef.getAndSet(null)?.close()
-        } catch (t: Throwable) {
-            Log.w(TAG, "close: conversation.close threw: ${t.message}")
-        }
+        // from under the chat client (LiteRtBidetGemmaClient) too. Provider releases the
+        // engine on process death. Per-chunk Conversations are now closed inside
+        // [transcribe]'s finally block, so there's nothing else to release here.
+        engineRef.set(null)
     }
 
     companion object {
