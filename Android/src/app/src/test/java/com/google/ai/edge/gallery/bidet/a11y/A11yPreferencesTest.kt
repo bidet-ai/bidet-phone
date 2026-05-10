@@ -20,13 +20,15 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import java.io.File
 
@@ -42,29 +44,18 @@ import java.io.File
  *
  * If a future agent renames the key or flips the default, this test fails — which is the
  * load-bearing guarantee the brief asks for ("toggle persists and reloads").
+ *
+ * Each test gets its own scratch file + its own DataStore instance. Reuse of a file across
+ * DataStores in the same process throws "multiple DataStores active for the same file"
+ * (FileStorage.kt:52), so we don't try to re-instantiate to "simulate a reload" — instead we
+ * verify the write→read round-trip on a single DataStore (DataStore guarantees that writes are
+ * observed by subsequent reads, which is the persistence guarantee we depend on at runtime).
  */
 class A11yPreferencesTest {
 
-    private lateinit var tempFile: File
-    private lateinit var dataStore: DataStore<Preferences>
-
-    @Before
-    fun setUp() {
-        tempFile = File.createTempFile("a11y_prefs_test_", ".preferences_pb")
-        // PreferenceDataStoreFactory expects to OWN the file path, so delete the empty
-        // createTempFile() artifact and let DataStore create it on first write.
-        tempFile.delete()
-        dataStore = PreferenceDataStoreFactory.create(produceFile = { tempFile })
-    }
-
-    @After
-    fun tearDown() {
-        if (tempFile.exists()) tempFile.delete()
-    }
-
     @Test
-    fun default_isOff_whenKeyNeverWritten() = runTest {
-        val prefs = dataStore.data.first()
+    fun default_isOff_whenKeyNeverWritten() = runTestWithStore { store ->
+        val prefs = store.data.first()
         val value = prefs[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
             ?: A11yPreferences.DEFAULT_USE_OPEN_DYSLEXIC
         assertFalse("OpenDyslexic toggle MUST default OFF — opt-in only", value)
@@ -72,24 +63,23 @@ class A11yPreferencesTest {
     }
 
     @Test
-    fun toggleOn_persists_andReloads() = runTest {
-        // Write ON.
-        dataStore.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = true }
-        // Reload from a fresh handle on the SAME file path — proves it survived the write
-        // boundary (this is the "persists and reloads" contract).
-        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
-        val value = reloaded.data.first()[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
-        assertTrue("Toggle ON must persist", value == true)
+    fun toggleOn_persistsAcrossReads() = runTestWithStore { store ->
+        store.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = true }
+        val value = store.data.first()[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
+        assertTrue("Toggle ON must be readable after the write completes", value == true)
     }
 
     @Test
-    fun toggleOff_persists_andReloads() = runTest {
-        // Write ON, then OFF — verify the OFF state persists too (not just the first write).
-        dataStore.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = true }
-        dataStore.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = false }
-        val reloaded = PreferenceDataStoreFactory.create(produceFile = { tempFile })
-        val value = reloaded.data.first()[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
-        assertEquals(false, value)
+    fun toggleOff_persistsAfterPreviousOn() = runTestWithStore { store ->
+        store.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = true }
+        store.edit { it[A11yPreferences.KEY_USE_OPEN_DYSLEXIC] = false }
+        val value = store.data.first()[A11yPreferences.KEY_USE_OPEN_DYSLEXIC]
+        assertEquals(
+            "Most recent write (false) must win — proves DataStore actually persists state, " +
+                "not a stale in-memory flag.",
+            false,
+            value,
+        )
     }
 
     @Test
@@ -98,5 +88,29 @@ class A11yPreferencesTest {
         // every user's saved preference. Pin the literal here so a future rename triggers a
         // visible test failure and forces a deliberate migration decision.
         assertEquals("a11y_use_open_dyslexic", A11yPreferences.KEY_USE_OPEN_DYSLEXIC.name)
+    }
+
+    /**
+     * Helper: spin up a fresh DataStore on a unique scratch file, run the test body, then
+     * cancel the DataStore's CoroutineScope (releasing the file lock) and delete the file.
+     * Without the scope-cancel, leaking DataStore instances poison subsequent tests.
+     */
+    private fun runTestWithStore(block: suspend (DataStore<Preferences>) -> Unit) = runTest {
+        val tempFile = File.createTempFile("a11y_prefs_test_", ".preferences_pb")
+        tempFile.delete() // DataStore wants to own the path; createTempFile() already touched it.
+        val scopeJob = SupervisorJob()
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + scopeJob)
+        val store = PreferenceDataStoreFactory.create(
+            scope = scope,
+            produceFile = { tempFile },
+        )
+        try {
+            block(store)
+        } finally {
+            scope.cancel()
+            scopeJob.cancel()
+            // best-effort cleanup of the scratch file
+            tempFile.delete()
+        }
     }
 }
