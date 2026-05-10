@@ -106,6 +106,64 @@ class MoonshineEngineTest {
         assertNotNull("MoonshineEngine.transcribe(...) must remain present", transcribe)
     }
 
+    // --- splitForQuantizedEncoder ---------------------------------------------------------
+    //
+    // Regression coverage for the empty-transcripts bug we shipped against on 2026-05-10:
+    // the Moonshine quantized ONNX encoder errors with a broadcast mismatch on inputs
+    // longer than ~9 s, so we split each upstream 30 s chunk into ≤ 8 s sub-chunks with
+    // 0.5 s overlap. These tests pin the splitter contract so a future "let's increase
+    // the cap" change can't silently re-introduce the bug.
+
+    @Test
+    fun splitForQuantizedEncoder_shortClip_returnsInputUnchanged() {
+        // 5 s @ 16 kHz = 80 000 samples — well under the cap. Splitter must not allocate
+        // a copy: the single-element list contains the *same* array reference.
+        val pcm = FloatArray(16_000 * 5) { 0.1f }
+        val parts = MoonshineEngine.splitForQuantizedEncoder(pcm)
+        assertEquals(1, parts.size)
+        assertTrue("short clip must be returned by reference", parts[0] === pcm)
+    }
+
+    @Test
+    fun splitForQuantizedEncoder_exactlyCapClip_returnsInputUnchanged() {
+        // Boundary: a clip exactly at the 8 s cap should NOT trigger a split.
+        val pcm = FloatArray(MoonshineEngine.MAX_SUBCHUNK_SAMPLES) { 0.0f }
+        val parts = MoonshineEngine.splitForQuantizedEncoder(pcm)
+        assertEquals(1, parts.size)
+        assertEquals(MoonshineEngine.MAX_SUBCHUNK_SAMPLES, parts[0].size)
+    }
+
+    @Test
+    fun splitForQuantizedEncoder_thirtySecondClip_splitsWithOverlap() {
+        // 30 s @ 16 kHz = 480 000 samples — the production chunk size emitted by
+        // AudioCaptureEngine. Stride = 8 s − 0.5 s = 7.5 s. So we expect:
+        //   [0, 128 000), [120 000, 248 000), [240 000, 368 000), [360 000, 480 000)
+        // = 4 sub-chunks. None may exceed the cap.
+        val pcm = FloatArray(16_000 * 30) { 0.0f }
+        val parts = MoonshineEngine.splitForQuantizedEncoder(pcm)
+        assertTrue("expected ≥ 2 sub-chunks for a 30 s clip, got ${parts.size}", parts.size >= 2)
+        for ((i, part) in parts.withIndex()) {
+            assertTrue(
+                "sub-chunk #$i has ${part.size} samples, must be ≤ ${MoonshineEngine.MAX_SUBCHUNK_SAMPLES}",
+                part.size <= MoonshineEngine.MAX_SUBCHUNK_SAMPLES,
+            )
+        }
+        // Total sample coverage (sum minus overlaps) must equal the original length, so
+        // we don't drop any audio at the seams.
+        val stride = MoonshineEngine.MAX_SUBCHUNK_SAMPLES - MoonshineEngine.OVERLAP_SAMPLES
+        val coveredEnd = (parts.size - 1) * stride + parts.last().size
+        assertEquals(pcm.size, coveredEnd)
+    }
+
+    @Test
+    fun splitForQuantizedEncoder_emptyInput_returnsEmptySingleton() {
+        // Splitter must not crash on an empty array — transcribe() also short-circuits
+        // empty input upstream but defense in depth.
+        val parts = MoonshineEngine.splitForQuantizedEncoder(FloatArray(0))
+        assertEquals(1, parts.size)
+        assertEquals(0, parts[0].size)
+    }
+
     @Test
     fun pretendInitFails_doesNotThrowOnInitializeReturn() {
         // We can't actually load the JNI but we can confirm the public surface of
