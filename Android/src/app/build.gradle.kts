@@ -313,10 +313,15 @@ abstract class FetchMoonshineModelTask : DefaultTask() {
                 )
             }
 
-            // Wipe + recreate the asset dir, then extract the tarball into it. We flatten
-            // the bundle's top-level "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27/"
-            // directory away so MoonshineEngine.kt can reference assets/moonshine/<file>.
-            outDir.deleteRecursively()
+            // Wipe just the gitignored payload files (NOT README.md / .gitignore which we
+            // commit), then extract the tarball into the asset dir. We flatten the bundle's
+            // top-level "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27/" directory away
+            // so MoonshineEngine.kt can reference assets/moonshine/<file>.
+            JavaFile(outDir, "encoder_model.ort").delete()
+            JavaFile(outDir, "decoder_model_merged.ort").delete()
+            JavaFile(outDir, "tokens.txt").delete()
+            JavaFile(outDir, "LICENSE").delete()
+            JavaFile(outDir, "test_wavs").deleteRecursively()
             outDir.mkdirs()
             extractTarBz2(tmp, outDir)
             tmp.delete()
@@ -334,18 +339,12 @@ abstract class FetchMoonshineModelTask : DefaultTask() {
     }
 
     /**
-     * Stream-extract a .tar.bz2 archive without depending on Apache Commons or any other
-     * external lib — just the JDK + Gradle's built-in `bzcat`-equivalent. Uses
-     * `BZip2CompressorInputStream`-equivalent via `java.util.zip` is not available, so we
-     * shell out to bzip2 if installed, falling back to a pure-JDK tar reader after Bzip2
-     * decoding via a system command. To keep this pure-JDK we use a minimal bzip2 reader
-     * built on top of CommonsCompress... no, simpler: use the `tar` command which is
-     * universally available on Linux/macOS/CI. Windows isn't a build host for this project.
+     * Extract a .tar.bz2 archive by shelling out to the `tar` binary (universally available
+     * on Linux + macOS CI runners + dev machines; Windows isn't a build host for this
+     * project). bzip2 decompression happens transparently via `-xjf`. `--strip-components=1`
+     * flattens the single top-level directory the sherpa-onnx tarball ships with.
      */
     private fun extractTarBz2(tarBz2: JavaFile, destDir: JavaFile) {
-        // Use the `tar` binary (available on Linux + macOS CI runners + dev machines). It
-        // handles bz2 transparently with `-xjf`. Strip-components=1 flattens the
-        // single-top-level directory the sherpa-onnx tarball ships with.
         val proc = ProcessBuilder(
             "tar", "-xjf", tarBz2.absolutePath,
             "-C", destDir.absolutePath,
