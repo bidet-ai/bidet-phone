@@ -147,6 +147,17 @@ android {
     compose = true
     buildConfig = true
   }
+
+  // 2026-05-09: returnDefaultValues so JVM unit tests can call android.util.Log without
+  // the Android stub throwing "Method not mocked" RuntimeException. The
+  // BidetSharedLiteRtEngineProvider's failure path logs via Log.e — without this flag the
+  // failure-state test (BidetSharedLiteRtEnginePrewarmTest.ensureReadyImpl_failureThenRetry_…)
+  // crashes on the Log call instead of asserting the state-flow transition. The flag returns
+  // the JDK default for any unstubbed method (null/0/false), which is the right semantic for
+  // "this is a JVM unit test and we don't care about Android-specific behaviour".
+  testOptions {
+    unitTests.isReturnDefaultValues = true
+  }
 }
 
 dependencies {
