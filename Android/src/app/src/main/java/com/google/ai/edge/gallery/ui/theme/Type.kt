@@ -37,6 +37,31 @@ val appFontFamily =
 
 val baseline = Typography()
 
+/**
+ * bidet-ai a11y (2026-05-10): OpenDyslexic font family for the optional dyslexia-friendly
+ * Clean-tab rendering. License: SIL Open Font License v1.1 — see
+ * `third_party/opendyslexic/OFL.txt` for the bundled license text. Source:
+ * [opendyslexic.org](https://opendyslexic.org/).
+ *
+ * The font is bundled but only applied to Clean-tab output text when the user opts in via the
+ * "Use OpenDyslexic font for cleaned text" setting (default OFF). RAW transcript rendering is
+ * never re-styled — verbatim text stays in the default app typography.
+ */
+val openDyslexicFontFamily =
+  FontFamily(
+    Font(R.font.opendyslexic_regular, FontWeight.Normal),
+    Font(R.font.opendyslexic_bold, FontWeight.Bold),
+    Font(R.font.opendyslexic_italic, FontWeight.Normal, androidx.compose.ui.text.font.FontStyle.Italic),
+  )
+
+/**
+ * Body-text style for Clean-tab cached output when OpenDyslexic is toggled on. Matches the
+ * default `bodyMedium` size/line-height baseline so toggling the font doesn't reflow the layout
+ * dramatically — only the glyph shapes change.
+ */
+val cleanTabBody =
+  baseline.bodyMedium.copy(fontFamily = openDyslexicFontFamily)
+
 val AppTypography =
   Typography(
     displayLarge = baseline.displayLarge.copy(fontFamily = appFontFamily),

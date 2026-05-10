@@ -62,6 +62,9 @@
   <string name="bidet_settings_webhook_url_label" translatable="false">Webhook URL</string>
   <string name="bidet_settings_webhook_key_label" translatable="false">X-AG-KEY</string>
   <string name="bidet_settings_send_to_tp3" translatable="false">Send to TP3</string>
+  <string name="bidet_settings_a11y_section" translatable="false">Accessibility</string>
+  <string name="bidet_settings_use_opendyslexic_label" translatable="false">Use OpenDyslexic font for cleaned text</string>
+  <string name="bidet_settings_use_opendyslexic_helper" translatable="false">When on, the Clean-for-me and Clean-for-others outputs render in the OpenDyslexic typeface. Default off — some readers find it harder to read, so this is opt-in. The raw transcript stays in the default font.</string>
   <string name="bidet_chunks_behind" translatable="false">Transcription behind by %1$d chunks</string>
   <string name="bidet_chunk_failure_marker" translatable="false">[chunk %1$d transcription failed]</string>
   <!-- Two-tab restructure (2026-05-10): RAW lives at the top of the screen as a reading

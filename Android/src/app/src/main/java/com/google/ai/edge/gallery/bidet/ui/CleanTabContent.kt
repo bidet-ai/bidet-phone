@@ -32,14 +32,20 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
+import com.google.ai.edge.gallery.ui.theme.cleanTabBody
 
 /**
  * Body for one of the two GENERATED tabs in the two-tab restructure (2026-05-10). Renders
@@ -84,6 +90,14 @@ private fun CleanTabBody(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
 
+    // bidet-ai a11y (2026-05-10): observe the OpenDyslexic toggle so the cleaned-output
+    // Text nodes restyle the moment the user flips it. RAW transcript rendering is NOT
+    // wired to this flow on purpose — verbatim text is not re-skinned. See
+    // [A11yPreferences] for the contract.
+    val useOpenDyslexic by remember(context) { A11yPreferences.observeUseOpenDyslexic(context) }
+        .collectAsState(initial = A11yPreferences.DEFAULT_USE_OPEN_DYSLEXIC)
+    val cleanOutputStyle: TextStyle = if (useOpenDyslexic) cleanTabBody else TextStyle.Default
+
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -120,6 +134,7 @@ private fun CleanTabBody(
                     Text(
                         text = AnnotatedString(state.partialText),
                         modifier = Modifier.fillMaxWidth(),
+                        style = cleanOutputStyle,
                     )
                 }
             }
@@ -137,6 +152,7 @@ private fun CleanTabBody(
                                     .show()
                             },
                         ),
+                    style = cleanOutputStyle,
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onGenerate) { Text("Regenerate") }
