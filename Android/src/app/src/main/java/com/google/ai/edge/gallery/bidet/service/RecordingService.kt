@@ -45,6 +45,7 @@ import com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine
 import com.google.ai.edge.gallery.bidet.audio.WavConcatenator
 import com.google.ai.edge.gallery.bidet.chunk.ChunkQueue
 import com.google.ai.edge.gallery.bidet.cleaning.ChunkCleaner
+import com.google.ai.edge.gallery.bidet.cleaning.Glossary
 import com.google.ai.edge.gallery.bidet.data.BidetSession
 import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
@@ -314,8 +315,11 @@ class RecordingService : Service() {
                 ?: throw IllegalStateException("getExternalFilesDir returned null")
             val sessionDir = File(externalRoot, "sessions/$sessionId")
             sessionDir.mkdirs()
-            val cleanForMePrompt = assets.open(TabPref.defaultPromptAssetPath(SupportAxis.RECEPTIVE))
+            val cleanForMePromptBase = assets.open(TabPref.defaultPromptAssetPath(SupportAxis.RECEPTIVE))
                 .bufferedReader().use { it.readText() }
+            // v18.8 (2026-05-11): prepend the project-noun glossary so Gemma canonicalizes
+            // Moonshine mishears like "the day AI" → "Bidet AI" during per-chunk cleaning.
+            val cleanForMePrompt = Glossary.withGlossary(cleanForMePromptBase)
             ChunkCleaner(
                 sessionExternalDir = sessionDir,
                 gemma = gemmaClient,
