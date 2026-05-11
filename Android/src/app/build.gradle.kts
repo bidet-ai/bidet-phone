@@ -103,7 +103,21 @@ android {
   // base64-decodes RELEASE_KEYSTORE_B64 → RELEASE_KEYSTORE_PATH then exports the
   // password/alias env vars). Locally, if the env vars are unset, we silently fall through to
   // debug signing so a developer's `assembleRelease` does not require the production keystore.
+  //
+  // 2026-05-11: debug signingConfig wired to a stable repo-committed keystore at
+  // app/debug.keystore (NOT gitignored — intentional, debug-only). Without this AGP
+  // auto-generates a fresh random keystore per build host, which means every CI APK
+  // is signed with a different cert. That forces `adb uninstall` before each install
+  // (losing the 2.4 GB on-device Gemma model + recording sessions). Mark hit exactly
+  // this wall going v18.7 → v18.8. The committed keystore is DEBUG-ONLY — release
+  // signing is unchanged and still keyed to GitHub Secrets above.
   signingConfigs {
+    getByName("debug") {
+      storeFile = file("debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
     create("release") {
       val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
       if (!keystorePath.isNullOrBlank()) {
