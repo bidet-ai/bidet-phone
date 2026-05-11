@@ -17,9 +17,15 @@
 package com.google.ai.edge.gallery.bidet.ui
 
 import android.content.Context
+import android.content.ComponentName
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
+import androidx.core.content.ContextCompat
 import com.google.ai.edge.gallery.bidet.cleaning.ChunkCleaner
-import com.google.ai.edge.gallery.bidet.cleaning.RawChunker
+import com.google.ai.edge.gallery.bidet.service.CleanGenerationService
 import java.io.File
+import kotlinx.coroutines.Job
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -250,12 +256,27 @@ data class SessionDetailUiState(
 class SessionDetailViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sessionDao: BidetSessionDao,
-    private val gemma: BidetGemmaClient,
 ) : ViewModel() {
 
     private val tabPrefRepo: TabPrefRepository = DataStoreTabPrefRepository(context)
 
     private val sessionIdFlow = MutableStateFlow("")
+
+    /**
+     * v18.6 (2026-05-10): bound CleanGenerationService — same instance the live-recording
+     * tab uses. Routes History-screen Clean through a foreground service so Android can't
+     * kill the process mid-decode when the screen blanks. Bound in [init], unbound in
+     * [onCleared]. State arrives via the service's StateFlow and is filtered by sessionId
+     * + axis so multiple bound clients don't cross-talk.
+     */
+    @Volatile private var boundService: CleanGenerationService? = null
+    private var serviceConnection: ServiceConnection? = null
+    private var receptiveObserverJob: Job? = null
+    private var expressiveObserverJob: Job? = null
+
+    init {
+        bindCleanGenerationService()
+    }
 
     fun bind(sessionId: String) {
         if (sessionIdFlow.value == sessionId) return
@@ -359,12 +380,10 @@ class SessionDetailViewModel @Inject constructor(
                 target.value = TabState.Failed("RAW transcript is empty.")
                 return@launch
             }
-            target.value = TabState.Streaming(partialText = "", tokenCount = 0, tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP)
             try {
-                // Path B (2026-05-10): for RECEPTIVE (Clean for me), check if RecordingService's
-                // ChunkCleaner pre-cleaned every chunk during the live recording. If yes,
-                // stitch from disk and short-circuit — typically <100ms vs minutes for the
-                // on-tap chunked path. Only RECEPTIVE is pre-cleaned in v1.
+                // Path B short-circuit: if RecordingService pre-cleaned every chunk during
+                // the live recording, stitch from disk and finish in <100ms. Only RECEPTIVE
+                // is pre-cleaned in v1. Files live under sessions/<sid>/cleanings/.
                 if (axis == SupportAxis.RECEPTIVE) {
                     val expectedChunks = row?.chunkCount ?: 0
                     val externalRoot = context.getExternalFilesDir(null)
@@ -379,77 +398,113 @@ class SessionDetailViewModel @Inject constructor(
                         }
                     }
                 }
+                // v18.6 (2026-05-10): hand off to CleanGenerationService instead of running
+                // gemma in viewModelScope. The previous in-VM path was killed by Android
+                // mid-decode whenever the screen blanked or the user backgrounded the app
+                // (2026-05-10 10-min session: "Process ai.bidet.phone.moonshine has died:
+                // cch CRE"). The foreground service holds the process at fgs priority until
+                // generation completes. State arrives via [handleServiceState] which is
+                // wired in [bindCleanGenerationService] below. Caching to the row is also
+                // handled there so the Cached state and the DB write stay in sync.
                 val systemPrompt = resolveSystemPrompt(axis)
-                val result = withContext(Dispatchers.Default) {
-                    val windows = RawChunker.chunk(raw)
-                    if (windows.size <= 1) {
-                        // Short dump — single streaming call, behaviour unchanged.
-                        gemma.runInferenceStreaming(
-                            systemPrompt = systemPrompt,
-                            userPrompt = raw,
-                            maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
-                            temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
-                            onChunk = { cumulative, chunkIndex ->
-                                target.value = TabState.Streaming(
-                                    partialText = cumulative,
-                                    tokenCount = chunkIndex,
-                                    tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
-                                )
-                            },
-                        )
-                    } else {
-                        // Long dump — chunked streaming. Per-window output cap drops to
-                        // CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP so wall-clock stays bearable;
-                        // partial text shows "Cleaning part N of M…" header above
-                        // already-completed parts and the currently-streaming part so the
-                        // user sees text growing instead of an indefinite spinner.
-                        val parts = mutableListOf<String>()
-                        val totalCap = windows.size * BidetTabsViewModel.CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP
-                        var streamCounter = 0
-                        windows.forEachIndexed { index, window ->
-                            val partSystemPrompt = buildString {
-                                append(systemPrompt)
-                                append("\n\n(You are cleaning part ")
-                                append(index + 1)
-                                append(" of ")
-                                append(windows.size)
-                                append(" of a long brain dump. Stay faithful to THIS segment only — ")
-                                append("do not re-introduce content from earlier parts and do not preface ")
-                                append("your output with meta-commentary about parts.)")
-                            }
-                            val priorBlock = if (parts.isEmpty()) "" else parts.joinToString("\n\n") + "\n\n"
-                            val header = "Cleaning part ${index + 1} of ${windows.size}…\n\n"
-                            val partText = gemma.runInferenceStreaming(
-                                systemPrompt = partSystemPrompt,
-                                userPrompt = window,
-                                maxOutputTokens = BidetTabsViewModel.CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP,
-                                temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
-                                onChunk = { cumulative, _ ->
-                                    streamCounter += 1
-                                    target.value = TabState.Streaming(
-                                        partialText = header + priorBlock + cumulative,
-                                        tokenCount = streamCounter,
-                                        tokenCap = totalCap,
-                                    )
-                                },
-                            )
-                            parts.add(partText.trim())
-                        }
-                        parts.joinToString("\n\n")
-                    }
-                }
-                val now = System.currentTimeMillis()
-                target.value = TabState.Cached(result, now)
-                // Phase 4A.1: column-targeted UPDATE. The two slot indices map onto the
-                // existing two columns to avoid a Room migration.
-                when (axis) {
-                    SupportAxis.RECEPTIVE -> sessionDao.updateCleanCached(sessionId, result)
-                    SupportAxis.EXPRESSIVE -> sessionDao.updateForaiCached(sessionId, result)
-                }
+                target.value = TabState.Streaming(
+                    partialText = "",
+                    tokenCount = 0,
+                    tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                )
+                ContextCompat.startForegroundService(
+                    context,
+                    CleanGenerationService.startIntent(
+                        context = context,
+                        sessionId = sessionId,
+                        axis = axis,
+                        systemPrompt = systemPrompt,
+                        userPrompt = raw,
+                        tokenCap = BidetTabsViewModel.CLEAN_TAB_OUTPUT_TOKEN_CAP,
+                        temperature = BidetTabsViewModel.DEFAULT_TEMPERATURE,
+                    ),
+                )
             } catch (t: Throwable) {
                 target.value = TabState.Failed(t.message ?: "Generation failed")
             }
         }
+    }
+
+    /**
+     * v18.6 (2026-05-10): bind to the same [CleanGenerationService] singleton the live
+     * recording tab uses. The service emits a [CleanGenerationService.GenerationState]
+     * stream that we filter by `sessionId` (so a generation started for a different
+     * session doesn't clobber this view-model's state) and `axis`. Two observer jobs run
+     * so RECEPTIVE and EXPRESSIVE can be in flight independently if the user kicks off
+     * both before the first completes.
+     */
+    private fun bindCleanGenerationService() {
+        if (serviceConnection != null) return
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                val svc = (binder as? CleanGenerationService.LocalBinder)?.service() ?: return
+                boundService = svc
+                receptiveObserverJob?.cancel()
+                receptiveObserverJob = viewModelScope.launch {
+                    svc.stateFlow.collect { handleServiceState(it, SupportAxis.RECEPTIVE) }
+                }
+                expressiveObserverJob?.cancel()
+                expressiveObserverJob = viewModelScope.launch {
+                    svc.stateFlow.collect { handleServiceState(it, SupportAxis.EXPRESSIVE) }
+                }
+            }
+            override fun onServiceDisconnected(name: ComponentName?) {
+                boundService = null
+            }
+        }
+        serviceConnection = connection
+        val intent = Intent(context, CleanGenerationService::class.java)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    internal fun handleServiceState(
+        state: CleanGenerationService.GenerationState,
+        observerAxis: SupportAxis,
+    ) {
+        val mySessionId = sessionIdFlow.value
+        if (mySessionId.isEmpty()) return
+        val target = stateFlowFor(observerAxis)
+        when (state) {
+            is CleanGenerationService.GenerationState.Idle -> { /* keep current */ }
+            is CleanGenerationService.GenerationState.Streaming -> {
+                if (state.sessionId != mySessionId || state.axis != observerAxis) return
+                target.value = TabState.Streaming(
+                    partialText = state.partialText,
+                    tokenCount = state.tokenCount,
+                    tokenCap = state.tokenCap,
+                )
+            }
+            is CleanGenerationService.GenerationState.Done -> {
+                if (state.sessionId != mySessionId || state.axis != observerAxis) return
+                target.value = TabState.Cached(state.text, state.finishedAtMs)
+                viewModelScope.launch {
+                    try {
+                        when (observerAxis) {
+                            SupportAxis.RECEPTIVE -> sessionDao.updateCleanCached(mySessionId, state.text)
+                            SupportAxis.EXPRESSIVE -> sessionDao.updateForaiCached(mySessionId, state.text)
+                        }
+                    } catch (_: Throwable) { /* row write failure is non-fatal — text is already visible */ }
+                }
+            }
+            is CleanGenerationService.GenerationState.Failed -> {
+                if (state.sessionId != mySessionId || state.axis != observerAxis) return
+                target.value = TabState.Failed(state.message)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        receptiveObserverJob?.cancel()
+        expressiveObserverJob?.cancel()
+        serviceConnection?.let { context.unbindService(it) }
+        serviceConnection = null
+        boundService = null
     }
 
     /**

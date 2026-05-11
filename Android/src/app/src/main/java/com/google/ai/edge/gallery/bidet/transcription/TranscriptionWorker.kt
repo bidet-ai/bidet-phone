@@ -203,13 +203,19 @@ class TranscriptionWorker(
         // Heavy lifting (Moonshine ASR or Gemma audio decode) is CPU-bound — push onto
         // Dispatchers.Default so we don't compete with the audio capture loop for a single
         // thread.
-        val text = withContext(NonCancellable + Dispatchers.Default) {
+        val rawText = withContext(NonCancellable + Dispatchers.Default) {
             val floatPcm = transcriptionEngine.int16ToFloat32(chunk.bytes)
             transcriptionEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
         }
+        // v18.6 (2026-05-10): sanitize per-chunk Moonshine output BEFORE persisting to
+        // the running RAW. Strips music notes, Thai/CJK trailers, repeat-token loops
+        // (cap 3), filler runs (uh/um cap 1), fake-number sequences, and the bathroom-
+        // ghost silence-fill. Mishears (Pixar→fix, Bidet→the day) are NOT touched — the
+        // cleaning model picks those up with context. See TranscriptSanitizer kdoc.
+        val text = com.google.ai.edge.gallery.bidet.cleaning.TranscriptSanitizer.clean(rawText)
         Log.w(
             TAG,
-            "handleAudio TRANSCRIBE_DONE idx=${chunk.idx} textLen=${text.length} " +
+            "handleAudio TRANSCRIBE_DONE idx=${chunk.idx} rawLen=${rawText.length} sanitizedLen=${text.length} " +
                 "preview='${text.take(40).replace("\n", " ")}'",
         )
         withContext(NonCancellable) {
