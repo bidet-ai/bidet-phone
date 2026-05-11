@@ -137,17 +137,24 @@ object TranscriptSanitizer {
     )
 
     /**
-     * v18.7: phrase repeat — 2-8 words (including contractions / apostrophes), separated
-     * from the next instance by whitespace + optional punctuation, repeated ≥3 times.
-     * Group 1 captures one canonical instance to keep. Examples killed:
+     * v18.7: phrase repeat — MULTI-WORD phrases (≥2 words, including contractions /
+     * apostrophes), separated from the next instance by whitespace + optional
+     * punctuation, repeated ≥3 times. Group 1 captures one canonical instance to keep.
+     *
+     * MUST require ≥2 words so we don't collide with REPEAT_TOKEN_RUN above. If both
+     * patterns could match the same input ("really really really" is a single-word run
+     * that REPEAT_TOKEN_RUN already capped at 3 — a 1-word phrase regex would then eat
+     * the remaining 3-instance repeat and unbalance the unit-test invariants).
+     *
+     * Examples killed:
      *   "I'm hungry. I'm hungry. I'm hungry. I'm hungry. I'm hungry. I'm hungry."
      *   "I'm going to be on the road. I'm going to be on the road. I'm going to be on the road."
-     *   "First, first, first, first." — also covered by REPEAT_TOKEN_RUN; both fire fine.
      * NOT killed:
-     *   "I'll be there. I'll be there." (only 2 instances)
+     *   "I'll be there. I'll be there." (only 2 instances of the phrase)
+     *   "really really really" (single-word run — REPEAT_TOKEN_RUN's job)
      */
     private val PHRASE_REPEAT_RUN = Regex(
-        "(\\b[A-Za-z'\\s]{2,80}?\\b)([\\s,.!?]+\\1\\b){2,}",
+        "(\\b\\w[\\w']*(?:\\s+\\w[\\w']*)+)([\\s,.!?]+\\1\\b){2,}",
         RegexOption.IGNORE_CASE,
     )
 
