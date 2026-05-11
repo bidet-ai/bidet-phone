@@ -23,6 +23,7 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.google.ai.edge.gallery.bidet.cleaning.ChunkCleaner
+import com.google.ai.edge.gallery.bidet.cleaning.Glossary
 import com.google.ai.edge.gallery.bidet.service.CleanGenerationService
 import java.io.File
 import kotlinx.coroutines.Job
@@ -536,17 +537,23 @@ class SessionDetailViewModel @Inject constructor(
     /**
      * Resolve the system prompt for [axis]. Mirrors [BidetTabsViewModel.resolveSystemPrompt]:
      * debug override > user-edited prompt > bundled default.
+     *
+     * v18.8 (2026-05-11): every resolved prompt is wrapped with [Glossary.withGlossary] so the
+     * project-noun list lands ahead of the prompt body regardless of which resolution branch
+     * fires. [Glossary.withGlossary] is idempotent — if the caller already wrapped the input
+     * (e.g. a user override that pasted in the glossary header) it's a no-op.
      */
     private suspend fun resolveSystemPrompt(axis: SupportAxis): String {
         val prefs = context.bidetDataStore.data.first()
         val override = prefs[BidetTabsViewModel.promptOverrideKey(axis)]
-        if (!override.isNullOrBlank()) return override
+        if (!override.isNullOrBlank()) return Glossary.withGlossary(override)
         val defaultPrompt = withContext(Dispatchers.IO) {
             context.assets.open(TabPref.defaultPromptAssetPath(axis)).bufferedReader().use { it.readText() }
         }
         val pref = tabPrefRepo.read(axis, defaultPrompt)
         val trimmed = pref.promptTemplate.trim()
-        return if (trimmed.isBlank()) defaultPrompt else pref.promptTemplate
+        val resolved = if (trimmed.isBlank()) defaultPrompt else pref.promptTemplate
+        return Glossary.withGlossary(resolved)
     }
 
     private fun stateFlowFor(axis: SupportAxis): MutableStateFlow<TabState> = when (axis) {
