@@ -73,6 +73,18 @@ object TranscriptSanitizer {
             "$word $word $word"
         }
 
+        // 6b) v18.7 (2026-05-10): cap repeated PHRASES (2–8 word sequences) to 1
+        //     instance. Mark's 2026-05-10 dump emitted "I'm hungry. I'm hungry. ..." ×6
+        //     and "I'm going to be on the road." ×3 — the single-word run rule in #6
+        //     doesn't catch these because each token (I, 'm, hungry) appears between
+        //     other tokens. Run TWICE so back-to-back groups (e.g. "AAA BBB AAA BBB
+        //     AAA BBB" with overlap) settle. Idempotent on the second pass.
+        repeat(2) {
+            out = PHRASE_REPEAT_RUN.replace(out) { match ->
+                match.groupValues[1].trim()
+            }
+        }
+
         // 7) Collapse multi-space and multi-comma sequences left behind.
         out = MULTI_SPACE.replace(out, " ")
         out = MULTI_COMMA.replace(out, ",")
@@ -121,6 +133,21 @@ object TranscriptSanitizer {
      */
     private val REPEAT_TOKEN_RUN = Regex(
         "\\b([A-Za-z']{1,20})\\b([\\s,]+\\1\\b){3,}",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * v18.7: phrase repeat — 2-8 words (including contractions / apostrophes), separated
+     * from the next instance by whitespace + optional punctuation, repeated ≥3 times.
+     * Group 1 captures one canonical instance to keep. Examples killed:
+     *   "I'm hungry. I'm hungry. I'm hungry. I'm hungry. I'm hungry. I'm hungry."
+     *   "I'm going to be on the road. I'm going to be on the road. I'm going to be on the road."
+     *   "First, first, first, first." — also covered by REPEAT_TOKEN_RUN; both fire fine.
+     * NOT killed:
+     *   "I'll be there. I'll be there." (only 2 instances)
+     */
+    private val PHRASE_REPEAT_RUN = Regex(
+        "(\\b[A-Za-z'\\s]{2,80}?\\b)([\\s,.!?]+\\1\\b){2,}",
         RegexOption.IGNORE_CASE,
     )
 

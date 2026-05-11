@@ -76,6 +76,19 @@ class LiteRtBidetGemmaClient @Inject constructor(
     @Volatile private var conversation: Conversation? = null
     private val initMutex = Mutex()
 
+    /**
+     * v18.7 (2026-05-10): serializes the full inference path (init + decode) so two
+     * callers can't share the engine concurrently. Symptom of the prior race: native
+     * SIGSEGV inside liblitertlm_jni at offset 0x4c9060 when ChunkCleaner's per-chunk
+     * pre-cleaning collided with CleanGenerationService's on-tap call — both hit the
+     * same shared Engine + Conversation and LiteRT-LM null-derefs internally. The init
+     * mutex only protected the init+conversation-create critical section; nothing
+     * guarded sendMessageAsync, so the second caller could mutate Conversation state
+     * mid-decode of the first call. This wraps the entire suspend body so a second
+     * caller blocks until the first's onDone/onError fires.
+     */
+    private val inferenceMutex = Mutex()
+
     @OptIn(ExperimentalApi::class)
     override suspend fun runInference(
         systemPrompt: String,
@@ -97,7 +110,7 @@ class LiteRtBidetGemmaClient @Inject constructor(
         maxOutputTokens: Int,
         temperature: Float,
         onChunk: (cumulativeText: String, chunkIndex: Int) -> Unit,
-    ): String {
+    ): String = inferenceMutex.withLock {
         if (!modelProvider.isModelReady()) {
             throw BidetModelNotReadyException(
                 "Gemma 4 model is not downloaded. Complete the first-run download before " +
@@ -105,8 +118,11 @@ class LiteRtBidetGemmaClient @Inject constructor(
             )
         }
 
-        // Build / rebuild the conversation under a mutex so concurrent tab generations don't
-        // race the LiteRT-LM Conversation lifecycle.
+        // Build / rebuild the conversation under a separate mutex (initMutex) so the
+        // conversation-create step is its own protected critical section — the outer
+        // inferenceMutex already prevents two callers from arriving here at the same
+        // time, but initMutex keeps the kdoc / semantics clear and survives if the
+        // outer mutex is ever loosened.
         val activeConversation = initMutex.withLock {
             // The engine's maxNumTokens is the TOTAL context budget (prefill input + decoded
             // output), and per BidetSharedLiteRtEngineProvider#acquire kdoc, the value is
@@ -153,7 +169,10 @@ class LiteRtBidetGemmaClient @Inject constructor(
             conv
         }
 
-        return suspendCancellableCoroutine { cont ->
+        // The mutex spans the suspendCancellableCoroutine — kotlinx.coroutines Mutex holds
+        // across suspension by design, so the next caller actually waits for onDone/onError
+        // here, not just for the conversation-create above.
+        suspendCancellableCoroutine { cont ->
             val sb = StringBuilder()
             var chunkIndex = 0
             val callback = object : MessageCallback {

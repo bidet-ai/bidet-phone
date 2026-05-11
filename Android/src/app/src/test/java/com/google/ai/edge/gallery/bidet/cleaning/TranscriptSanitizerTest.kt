@@ -99,6 +99,40 @@ class TranscriptSanitizerTest {
         assertEquals("word other word", TranscriptSanitizer.clean(s))
     }
 
+    @Test fun phraseRepeat_imHungryX6_collapses() {
+        // From Mark's 2026-05-10 dump: "I'm hungry." × 6 in a row.
+        val s = "I'm hungry. I'm hungry. I'm hungry. I'm hungry. I'm hungry. I'm hungry. So anyway"
+        val out = TranscriptSanitizer.clean(s)
+        val matches = Regex("(?i)\\bI'?m hungry\\b").findAll(out).count()
+        assertEquals(1, matches)
+        assertTrue(out.contains("So anyway"))
+    }
+
+    @Test fun phraseRepeat_longPhrase_collapses() {
+        val s = "I'm going to be on the road. I'm going to be on the road. I'm going to be on the road. All right so"
+        val out = TranscriptSanitizer.clean(s)
+        val matches = Regex("(?i)\\bgoing to be on the road\\b").findAll(out).count()
+        assertEquals(1, matches)
+    }
+
+    @Test fun phraseRepeat_twoInstancesPreserved() {
+        // Only ≥3 instances trigger phrase collapse. Two is conversational.
+        val s = "I'll be there. I'll be there."
+        val out = TranscriptSanitizer.clean(s)
+        val matches = Regex("(?i)\\bI'll be there\\b").findAll(out).count()
+        assertEquals(2, matches)
+    }
+
+    @Test fun phraseRepeat_doesNotEatRealRepeatedTopic() {
+        // Repeated TOPIC words mid-conversation are fine if they aren't a contiguous
+        // 3-in-a-row pattern with no other words between instances.
+        val s = "The brain dump has changed my life. The brain dump is what I do every day. The brain dump is the product."
+        val out = TranscriptSanitizer.clean(s)
+        // All three of "The brain dump" should survive because each is followed by different words.
+        val matches = Regex("(?i)the brain dump").findAll(out).count()
+        assertEquals(3, matches)
+    }
+
     @Test fun idempotent() {
         val s = "the report card card card card card was anxiety-filling. uh uh uh uh and then ♪♪♪♪"
         val once = TranscriptSanitizer.clean(s)
