@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -132,6 +133,31 @@ fun SessionDetailScreen(
                     }
                 },
                 actions = {
+                    // v19 (2026-05-11): "Export session" — one tap to share the whole
+                    // session (RAW + Clean tabs + audio) through the standard share sheet.
+                    // Always shown (even if audio is absent) because the markdown export
+                    // works for transcript-only sessions too — useful for crash-survived
+                    // partial recordings where audio.wav never materialized.
+                    if (session != null) {
+                        IconButton(onClick = {
+                            // Result is intentionally discarded — success surfaces as the
+                            // share-sheet appearing; failure flows through the onError
+                            // callback as a Toast. We don't need a "success" toast on top
+                            // of the chooser dialog.
+                            exportSession(context, session) { msg ->
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Export failed: $msg",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }) {
+                            Icon(
+                                imageVector = Icons.Filled.IosShare,
+                                contentDescription = "Export session",
+                            )
+                        }
+                    }
                     if (session?.audioWavPath != null) {
                         IconButton(onClick = { copyWavToDownloads(context, session) }) {
                             Icon(

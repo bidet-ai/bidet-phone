@@ -22,7 +22,10 @@ on:
     # CI fires for PRs against either base so each phase gets a green check
     # before the parent phase merges. The `fix/v0.1-phase-*` glob lets stacked
     # cleanups (e.g. Phase 4A.2 atop Phase 4A.1) get CI before the parent merges.
-    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*"]
+    # v19 (2026-05-11): added feat/chunked-cleaning-* so PRs stacked on the v18
+    # chunked-cleaning branch (e.g. feat/session-export-v19) trigger CI before
+    # the parent branch merges to main.
+    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*", "feat/chunked-cleaning-*"]
 
 jobs:
   build:
