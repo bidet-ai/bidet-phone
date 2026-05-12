@@ -27,7 +27,10 @@ on:
     # parent branch merges to main.
     # 2026-05-11: added feat/v18.8-* so PRs stacked on feat/v18.8-glossary
     # (e.g. feat/stable-debug-keystore) trigger CI before v18.8 merges to main.
-    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*", "feat/chunked-cleaning-*", "feat/v18.8-*"]
+    # Task #36 (2026-05-11): added feat/stable-debug-keystore so PRs stacked on
+    # PR #41 (e.g. feat/skip-download-if-model-exists) get CI before the keystore
+    # PR merges. Once #41 lands this entry can come out.
+    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*", "feat/chunked-cleaning-*", "feat/v18.8-*", "feat/stable-debug-keystore"]
 
 jobs:
   build:
