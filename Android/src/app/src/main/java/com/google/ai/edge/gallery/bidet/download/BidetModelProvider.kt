@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -93,7 +94,18 @@ sealed class DownloadProgress {
  * owns the download lifecycle and reports progress as a [StateFlow]<[DownloadProgress]>.
  */
 interface BidetModelProvider {
-    /** True once the model file exists at [getModelPath] (size > 0). */
+    /**
+     * True once the model file exists at [getModelPath] AND its on-disk size matches the
+     * expected total within [BidetModelProviderImpl.MODEL_SIZE_TOLERANCE]. Partial / aborted
+     * downloads (file exists but length << expected) return false so [startDownload] knows to
+     * resume rather than treat the half-baked file as a usable model.
+     *
+     * Previously the check was just `exists() && length() > 0L`, which let a 1 GB partial
+     * download masquerade as ready and crashed the LiteRT-LM Engine on load. See task #36
+     * (2026-05-10) — Mark hit a wasted 3.5 GB re-download because a presence-only check
+     * gave the wrong answer in the other direction (file fully there → still triggered
+     * download path via a stale SharedPreferences flag).
+     */
     fun isModelReady(): Boolean
 
     /** Returns the on-disk file the LiteRT-LM Engine should load, or null if absent. */
@@ -162,7 +174,7 @@ class BidetModelProviderImpl @Inject constructor(
 
     override fun isModelReady(): Boolean {
         val f = getModelPath() ?: return false
-        return f.exists() && f.length() > 0L
+        return isFileReadyForModel(f)
     }
 
     override fun getModelPath(): File? {
@@ -179,6 +191,27 @@ class BidetModelProviderImpl @Inject constructor(
      * naturally when the work reaches a terminal state (Succeeded / Failed / Cancelled).
      */
     override fun startDownload(): Flow<DownloadProgress> {
+        // Task #36 (2026-05-10): SHORT-CIRCUIT when the model file is already on disk at full
+        // size. Without this guard, a stale SharedPreferences "not yet downloaded" flag (or
+        // any caller that hits start() without first checking isModelReady()) re-enqueues the
+        // 3.5 GB WorkManager job over a perfectly good file. That burns the user's bandwidth
+        // and wastes 8+ min on every re-install. Mark hit this on the v18.8 → v18.9 cutover
+        // after a fresh install on 2026-05-10.
+        //
+        // We do the check inside startDownload() rather than only at the GemmaDownloadScreen
+        // call site so EVERY caller — including future Settings → "Re-download model" flows —
+        // gets the protection for free.
+        if (isModelReady()) {
+            Log.i(
+                TAG,
+                "startDownload() called but model already present at " +
+                    "${getModelPath()?.absolutePath} (${getModelPath()?.length()} bytes); " +
+                    "short-circuiting to Success without enqueueing WorkManager job.",
+            )
+            _progress.value = DownloadProgress.Success
+            return flow { emit(DownloadProgress.Success) }
+        }
+
         // Snapshot the best-known total now so all observer paths agree. The HEAD-fetch may
         // refine this in [fetchExpectedTotalBytes]; any value the screen has fed through us
         // wins over the fallback.
@@ -360,6 +393,45 @@ class BidetModelProviderImpl @Inject constructor(
          * make the fallback role explicit.
          */
         const val EXPECTED_TOTAL_BYTES_FALLBACK: Long = 3_927_823_312L
+
+        /**
+         * Task #36 (2026-05-10): canonical on-disk size of the gemma-4-E4B-it.litertlm file.
+         * Used by [BidetModelProviderImpl.isModelReady] to distinguish a complete download
+         * from a partial. Verified on 2026-05-10 against a fresh sideload on Pixel 8 Pro.
+         *
+         * Keep this distinct from [EXPECTED_TOTAL_BYTES_FALLBACK]: that constant feeds the
+         * download progress bar denominator and reflects the HuggingFace `Content-Length`
+         * header (which includes a few-byte signature trailer), whereas this constant is the
+         * exact byte count `du -b` reports on the rename target. The two values are close
+         * but not identical — keeping them split avoids drift on either side.
+         */
+        const val EXPECTED_MODEL_SIZE_BYTES: Long = 3_659_530_240L
+
+        /**
+         * Task #36: tolerance applied to [EXPECTED_MODEL_SIZE_BYTES] when judging readiness.
+         * `0.99` lets a HuggingFace re-tag drop ~36 MB of bytes without forcing a re-download
+         * while still rejecting any partial that's lost more than 1% of the file. A 1 GB
+         * partial (the value mentioned in the task brief) sits at ~27% of expected and is
+         * comfortably below the threshold.
+         */
+        const val MODEL_SIZE_TOLERANCE: Double = 0.99
+
+        /**
+         * Task #36: extracted readiness check so a JVM unit test can exercise the
+         * size-threshold logic without booting an Android Context. The instance method
+         * [isModelReady] delegates here after resolving the on-disk path.
+         *
+         * Returns true iff the file exists AND its length is at least
+         * `EXPECTED_MODEL_SIZE_BYTES * MODEL_SIZE_TOLERANCE`. Any partial download
+         * (1 GB out of 3.66 GB, etc.) returns false so the caller resumes rather than
+         * loading a half-baked file into the LiteRT-LM Engine.
+         */
+        @JvmStatic
+        fun isFileReadyForModel(file: File): Boolean {
+            if (!file.exists()) return false
+            val minAcceptable = (EXPECTED_MODEL_SIZE_BYTES * MODEL_SIZE_TOLERANCE).toLong()
+            return file.length() >= minAcceptable
+        }
 
         const val WORK_NAME: String = "bidet_gemma4_e4b_download"
         const val WORK_TAG: String = "bidet_model_download"
