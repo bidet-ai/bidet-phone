@@ -28,6 +28,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.ai.edge.gallery.bidet.cleaning.Glossary
 import com.google.ai.edge.gallery.bidet.service.CleanGenerationService
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -221,12 +222,15 @@ class BidetTabsViewModel @Inject constructor(
      */
     private suspend fun resolveSystemPrompt(axis: SupportAxis): String {
         val override = readPromptOverride(axis)
-        if (!override.isNullOrBlank()) return override
+        if (!override.isNullOrBlank()) return Glossary.withGlossary(override)
 
         val defaultPrompt = loadDefaultPromptAsset(axis)
         val pref = tabPrefRepo.read(axis, defaultPrompt)
         val trimmed = pref.promptTemplate.trim()
-        return if (trimmed.isBlank()) defaultPrompt else pref.promptTemplate
+        val resolved = if (trimmed.isBlank()) defaultPrompt else pref.promptTemplate
+        // v18.8 (2026-05-11): prepend the project-noun glossary so Gemma canonicalizes
+        // Moonshine mishears. [Glossary.withGlossary] is idempotent — safe to call once.
+        return Glossary.withGlossary(resolved)
     }
 
     private suspend fun loadDefaultPromptAsset(axis: SupportAxis): String =
