@@ -30,6 +30,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.ai.edge.gallery.MainActivity
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.bidet.cleaning.RawChunker
 import com.google.ai.edge.gallery.bidet.ui.BidetGemmaClient
 import com.google.ai.edge.gallery.bidet.ui.BidetModelNotReadyException
 import com.google.ai.edge.gallery.bidet.ui.SupportAxis
@@ -171,21 +172,68 @@ class CleanGenerationService : Service() {
         // suspendCancellableCoroutine → Conversation.cancelProcess.
         generationJob = scope.launch(Dispatchers.Default) {
             try {
-                val finalText = gemma.runInferenceStreaming(
-                    systemPrompt = systemPrompt,
-                    userPrompt = userPrompt,
-                    maxOutputTokens = tokenCap,
-                    temperature = temperature,
-                    onChunk = { cumulative, chunkIndex ->
-                        _stateFlow.value = GenerationState.Streaming(
-                            sessionId = sessionId,
-                            axis = axis,
-                            partialText = cumulative,
-                            tokenCount = chunkIndex,
-                            tokenCap = tokenCap,
+                // Gemma 4 E2B has a hard 2048-token context cap. With tokenCap reserved for
+                // output and the system prompt budget, the per-call input ceiling is ~700
+                // tokens (≈2400 chars of English). Split longer RAW dumps into windows,
+                // clean each on-device, and stitch. Short dumps still take the single-call
+                // path so behaviour for sub-7-minute sessions is byte-identical.
+                val windows = RawChunker.chunk(userPrompt)
+                val finalText = if (windows.size <= 1) {
+                    gemma.runInferenceStreaming(
+                        systemPrompt = systemPrompt,
+                        userPrompt = userPrompt,
+                        maxOutputTokens = tokenCap,
+                        temperature = temperature,
+                        onChunk = { cumulative, chunkIndex ->
+                            _stateFlow.value = GenerationState.Streaming(
+                                sessionId = sessionId,
+                                axis = axis,
+                                partialText = cumulative,
+                                tokenCount = chunkIndex,
+                                tokenCap = tokenCap,
+                            )
+                        },
+                    )
+                } else {
+                    // Long-dump chunking: drop per-window cap so wall-clock stays bearable
+                    // on Tensor G3 CPU (1024 → 512 tokens per window cuts decode time ~half).
+                    val perChunkCap = CHUNKED_PER_WINDOW_OUTPUT_TOKEN_CAP
+                    val totalCap = windows.size * perChunkCap
+                    val parts = mutableListOf<String>()
+                    var streamCounter = 0
+                    windows.forEachIndexed { index, window ->
+                        val partSystemPrompt = buildString {
+                            append(systemPrompt)
+                            append("\n\n(You are cleaning part ")
+                            append(index + 1)
+                            append(" of ")
+                            append(windows.size)
+                            append(" of a long brain dump. Stay faithful to THIS segment only — ")
+                            append("do not re-introduce content from earlier parts and do not preface ")
+                            append("your output with meta-commentary about parts.)")
+                        }
+                        val previouslyComposed = if (parts.isEmpty()) "" else parts.joinToString("\n\n") + "\n\n"
+                        val header = "Cleaning part ${index + 1} of ${windows.size}…\n\n"
+                        val partText = gemma.runInferenceStreaming(
+                            systemPrompt = partSystemPrompt,
+                            userPrompt = window,
+                            maxOutputTokens = perChunkCap,
+                            temperature = temperature,
+                            onChunk = { cumulative, _ ->
+                                streamCounter += 1
+                                _stateFlow.value = GenerationState.Streaming(
+                                    sessionId = sessionId,
+                                    axis = axis,
+                                    partialText = header + previouslyComposed + cumulative,
+                                    tokenCount = streamCounter,
+                                    tokenCap = totalCap,
+                                )
+                            },
                         )
-                    },
-                )
+                        parts.add(partText.trim())
+                    }
+                    parts.joinToString("\n\n")
+                }
                 _stateFlow.value = GenerationState.Done(
                     sessionId = sessionId,
                     axis = axis,
@@ -307,6 +355,14 @@ class CleanGenerationService : Service() {
 
         const val DEFAULT_TOKEN_CAP: Int = 2048
         const val DEFAULT_TEMPERATURE: Float = 0.4f
+
+        /**
+         * Per-window output cap when [com.google.ai.edge.gallery.bidet.cleaning.RawChunker]
+         * splits the RAW. Lower than the single-shot cap so wall-clock stays bearable on
+         * Tensor G3 CPU (a 6-window 18-min dump at 2048 tokens/window = ~30 min decode;
+         * at 512 tokens/window = ~7 min decode).
+         */
+        const val CHUNKED_PER_WINDOW_OUTPUT_TOKEN_CAP: Int = 512
 
         fun startIntent(
             context: Context,

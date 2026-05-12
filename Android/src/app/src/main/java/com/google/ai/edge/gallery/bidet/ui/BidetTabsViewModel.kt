@@ -371,6 +371,16 @@ class BidetTabsViewModel @Inject constructor(
         const val DEFAULT_TEMPERATURE: Float = 0.3f
         const val CLEAN_TAB_OUTPUT_TOKEN_CAP: Int = 2048
 
+        /**
+         * Per-window output cap used when [com.google.ai.edge.gallery.bidet.cleaning.RawChunker]
+         * splits a long RAW into multiple chunks. The cleaning prompt already targets ≤30%
+         * length reduction so each ~700-token-input window cleans to ~500 output tokens; we
+         * cap at 512 to bound worst-case wall-clock per window without truncating reasonable
+         * cleanings. With 6 windows on a 12k-char dump this trims total wall-clock from
+         * ~30 min to ~6-10 min on Tensor G3 CPU.
+         */
+        const val CLEAN_TAB_CHUNKED_OUTPUT_TOKEN_CAP: Int = 512
+
         private val PLACEHOLDER_AGGREGATOR = TranscriptAggregator()
 
         fun promptOverrideKey(axis: SupportAxis): Preferences.Key<String> {

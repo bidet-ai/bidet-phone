@@ -51,6 +51,14 @@ class TranscriptAggregator(
      * aggregator per session.
      */
     private val onMutation: suspend (String, Int) -> Unit = { _, _ -> },
+    /**
+     * Path B (2026-05-10): called per chunk merge with `(chunkIdx, justThisChunkText)` so the
+     * lifecycle owner can enqueue background pre-cleaning of each chunk independently. The
+     * full cumulative text is also still delivered via [onMutation] — the two callbacks are
+     * independent. Failures in this callback are absorbed by [persistInsideLock] semantics —
+     * a cleaner crash must not break the live transcription pipeline.
+     */
+    private val onChunkAppended: suspend (Int, String) -> Unit = { _, _ -> },
 ) {
 
     private val mutex = Mutex()
@@ -105,6 +113,13 @@ class TranscriptAggregator(
             // failure to the user. The next merge will overwrite the row with the latest
             // text, so a single dropped write self-heals on the next chunk.
             persistInsideLock(merged, seenChunks.size, "append idx=$idx")
+            // Path B (2026-05-10): hand the per-chunk text to the pre-cleaner. Wrapped in
+            // try/catch so a cleaner crash never breaks the live transcription pipeline.
+            try {
+                onChunkAppended(idx, text.trim())
+            } catch (t: Throwable) {
+                Log.w("BidetTranscriptAggregator", "onChunkAppended threw at idx=$idx: ${t.message}", t)
+            }
         }
     }
 

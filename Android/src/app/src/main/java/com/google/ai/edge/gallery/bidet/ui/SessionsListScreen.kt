@@ -18,6 +18,7 @@ package com.google.ai.edge.gallery.bidet.ui
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -327,6 +328,54 @@ internal fun exportWav(context: Context, session: BidetSession) {
         // Defensive: missing FileProvider config / authority mismatch should fail gracefully
         // rather than crash.
         android.util.Log.w("BidetSessionsList", "exportWav failed: ${t.message}", t)
+    }
+}
+
+/**
+ * Copy the session's audio.wav into the public Downloads directory using
+ * [android.provider.MediaStore]. Lets a developer or support agent pull the WAV from the
+ * device with `adb pull /sdcard/Download/<file>` for offline transcription comparison —
+ * the per-app sessions/ dir under /sdcard/Android/data/<pkg>/ is FUSE-scoped and not
+ * accessible to `adb shell` even with `run-as`. Surfaces a Toast with the destination so
+ * the user knows what file to reference.
+ */
+internal fun copyWavToDownloads(context: Context, session: BidetSession) {
+    val path = session.audioWavPath ?: return
+    val source = File(path)
+    if (!source.exists()) {
+        android.widget.Toast.makeText(context, "No audio file for this session.", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val displayName = "bidet_${session.sessionId.take(8)}_${session.startedAtMs}.wav"
+        val resolver = context.contentResolver
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.provider.MediaStore.Downloads.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            android.provider.MediaStore.Files.getContentUri("external")
+        }
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "audio/wav")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+        val uri = resolver.insert(collection, values)
+            ?: throw IllegalStateException("MediaStore.insert returned null")
+        resolver.openOutputStream(uri)?.use { out ->
+            source.inputStream().use { it.copyTo(out) }
+        } ?: throw IllegalStateException("openOutputStream returned null")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.clear()
+            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        }
+        android.widget.Toast.makeText(context, "Saved /Download/$displayName", android.widget.Toast.LENGTH_LONG).show()
+    } catch (t: Throwable) {
+        android.util.Log.w("BidetSessionsList", "copyWavToDownloads failed: ${t.message}", t)
+        android.widget.Toast.makeText(context, "Save failed: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
     }
 }
 

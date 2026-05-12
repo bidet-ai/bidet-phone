@@ -76,6 +76,19 @@ class LiteRtBidetGemmaClient @Inject constructor(
     @Volatile private var conversation: Conversation? = null
     private val initMutex = Mutex()
 
+    /**
+     * v18.7 (2026-05-10): serializes the full inference path (init + decode) so two
+     * callers can't share the engine concurrently. Symptom of the prior race: native
+     * SIGSEGV inside liblitertlm_jni at offset 0x4c9060 when ChunkCleaner's per-chunk
+     * pre-cleaning collided with CleanGenerationService's on-tap call — both hit the
+     * same shared Engine + Conversation and LiteRT-LM null-derefs internally. The init
+     * mutex only protected the init+conversation-create critical section; nothing
+     * guarded sendMessageAsync, so the second caller could mutate Conversation state
+     * mid-decode of the first call. This wraps the entire suspend body so a second
+     * caller blocks until the first's onDone/onError fires.
+     */
+    private val inferenceMutex = Mutex()
+
     @OptIn(ExperimentalApi::class)
     override suspend fun runInference(
         systemPrompt: String,
@@ -97,7 +110,7 @@ class LiteRtBidetGemmaClient @Inject constructor(
         maxOutputTokens: Int,
         temperature: Float,
         onChunk: (cumulativeText: String, chunkIndex: Int) -> Unit,
-    ): String {
+    ): String = inferenceMutex.withLock {
         if (!modelProvider.isModelReady()) {
             throw BidetModelNotReadyException(
                 "Gemma 4 model is not downloaded. Complete the first-run download before " +
@@ -105,13 +118,25 @@ class LiteRtBidetGemmaClient @Inject constructor(
             )
         }
 
-        // Build / rebuild the conversation under a mutex so concurrent tab generations don't
-        // race the LiteRT-LM Conversation lifecycle.
+        // Build / rebuild the conversation under a separate mutex (initMutex) so the
+        // conversation-create step is its own protected critical section — the outer
+        // inferenceMutex already prevents two callers from arriving here at the same
+        // time, but initMutex keeps the kdoc / semantics clear and survives if the
+        // outer mutex is ever loosened.
         val activeConversation = initMutex.withLock {
+            // The engine's maxNumTokens is the TOTAL context budget (prefill input + decoded
+            // output), and per BidetSharedLiteRtEngineProvider#acquire kdoc, the value is
+            // taken from the FIRST acquire and stays for the lifetime of the engine. On the
+            // moonshine flavor the audio prewarm doesn't run (it's gated on USE_GEMMA_AUDIO),
+            // so cleaning is the only acquirer — passing maxOutputTokens here capped the
+            // engine at 2048 and surfaced as "input token IDs are too long, 3468 > 2048" on
+            // long RAW dumps. Pass a generous fixed budget instead so the engine can hold
+            // typical RAW + cleaning output in a single call. 8192 covers ~5,000-char RAW
+            // single-shot and is well below the 16384 used by gemma-flavor prewarm.
             val engine = try {
                 sharedEngineProvider.acquire(
                     requireAudio = false,
-                    maxNumTokens = maxOutputTokens,
+                    maxNumTokens = ENGINE_CONTEXT_BUDGET,
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "shared engine acquire failed", t)
@@ -144,7 +169,10 @@ class LiteRtBidetGemmaClient @Inject constructor(
             conv
         }
 
-        return suspendCancellableCoroutine { cont ->
+        // The mutex spans the suspendCancellableCoroutine — kotlinx.coroutines Mutex holds
+        // across suspension by design, so the next caller actually waits for onDone/onError
+        // here, not just for the conversation-create above.
+        suspendCancellableCoroutine { cont ->
             val sb = StringBuilder()
             var chunkIndex = 0
             val callback = object : MessageCallback {
@@ -192,6 +220,17 @@ class LiteRtBidetGemmaClient @Inject constructor(
         // upstream Gallery's defaults (DEFAULT_TOPK=40, DEFAULT_TOPP=0.95).
         private const val DEFAULT_TOPK: Int = 40
         private const val DEFAULT_TOPP: Float = 0.95f
+
+        /**
+         * Total context budget the LiteRT-LM Engine is built with. Empirically tested on
+         * 2026-05-10 on Pixel 8 Pro / Tensor G3: bumping from 2048 to 8192 to single-shot
+         * longer dumps backfired — the larger KV cache cut per-token decode from ~5 tk/s to
+         * ~2 tk/s on E4B (memory-bandwidth dominated). The 18-min dump took ~12 min per
+         * chunk vs ~3 min at 2048. Net: chunked-at-2048 beats single-shot-at-8192 for any
+         * dump that needs more than ~1500 output tokens, which is essentially all of them.
+         * Reverted to 2048 with the original RawChunker threshold of 2400 chars.
+         */
+        private const val ENGINE_CONTEXT_BUDGET: Int = 2048
     }
 }
 
