@@ -49,6 +49,13 @@ data class BidetSession(
     val cleanCached: String? = null,
     val analysisCached: String? = null,
     val foraiCached: String? = null,
+    /**
+     * v20 (2026-05-11): cached Clean-for-judges output. Persists across re-opens so an
+     * 800-1200 word contest writeup that took 6-10 minutes to decode on Tensor G3 CPU
+     * doesn't have to regenerate. Schema v3 (Migration 2→3 in
+     * [BidetDatabase.MIGRATION_2_3]). Null until the user taps Generate on the Judges tab.
+     */
+    val judgesCached: String? = null,
     val audioWavPath: String? = null,
     val chunkCount: Int = 0,
     val notes: String? = null,

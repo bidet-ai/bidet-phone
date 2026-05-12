@@ -54,7 +54,9 @@ object BidetDatabaseModule {
             // 2026-05-10 (Bug-3): explicit migration v1 → v2 adds the mergedChunkCount
             // column. fallbackToDestructiveMigration is still NOT added — losing a user's
             // brain-dump history because of a schema bump is unacceptable.
-            .addMigrations(BidetDatabase.MIGRATION_1_2)
+            // v20 (2026-05-11): explicit migration v2 → v3 adds the judgesCached column
+            // for the Clean-for-judges contest-pitch tab.
+            .addMigrations(BidetDatabase.MIGRATION_1_2, BidetDatabase.MIGRATION_2_3)
             .build()
 
     @Provides

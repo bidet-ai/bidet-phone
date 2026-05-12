@@ -41,20 +41,28 @@ data class TabPref(
         /**
          * Default label for an axis. These ship as the chip text on first launch and can be
          * restored via the editor's "Reset to default" button.
+         *
+         * v20 (2026-05-11): JUDGES default added for the Clean-for-judges contest-pitch tab.
          */
         fun defaultLabel(axis: SupportAxis): String = when (axis) {
             SupportAxis.RECEPTIVE -> "Clean for me"
             SupportAxis.EXPRESSIVE -> "Clean for others"
+            SupportAxis.JUDGES -> "Clean for judges"
         }
 
         /**
          * Default asset path containing the fidelity-first prompt for an axis. These are the
          * PR #28 prompts; do not edit them in this PR — the bottom-sheet "Reset to default"
-         * button reads them through this map. Both files use the `{transcript}` placeholder.
+         * button reads them through this map. All files use the `{transcript}` placeholder.
+         *
+         * v20 (2026-05-11): JUDGES default points at `prompts/judges_default.txt`, which is a
+         * verbatim mirror of [com.google.ai.edge.gallery.bidet.cleaning.Prompts.CLEAN_FOR_JUDGES_PROMPT].
+         * The drift is pinned by [com.google.ai.edge.gallery.bidet.cleaning.PromptsTest].
          */
         fun defaultPromptAssetPath(axis: SupportAxis): String = when (axis) {
             SupportAxis.RECEPTIVE -> "prompts/receptive_default.txt"
             SupportAxis.EXPRESSIVE -> "prompts/expressive_default.txt"
+            SupportAxis.JUDGES -> "prompts/judges_default.txt"
         }
     }
 }

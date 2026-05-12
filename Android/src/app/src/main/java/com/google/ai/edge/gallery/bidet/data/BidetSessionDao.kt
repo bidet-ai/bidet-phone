@@ -71,6 +71,14 @@ interface BidetSessionDao {
     @Query("UPDATE bidet_sessions SET foraiCached = :text WHERE sessionId = :sessionId")
     suspend fun updateForaiCached(sessionId: String, text: String)
 
+    /**
+     * v20 (2026-05-11): atomic update for the Clean-for-judges contest-pitch cache. Mirrors
+     * the other axis-specific writers — single SQL UPDATE so two concurrent generators on
+     * different tabs can't clobber each other's columns via a read-modify-write race.
+     */
+    @Query("UPDATE bidet_sessions SET judgesCached = :text WHERE sessionId = :sessionId")
+    suspend fun updateJudgesCached(sessionId: String, text: String)
+
     @Query("UPDATE bidet_sessions SET rawText = :text WHERE sessionId = :sessionId")
     suspend fun updateRawText(sessionId: String, text: String)
 

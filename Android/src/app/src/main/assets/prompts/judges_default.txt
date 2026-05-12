@@ -1,0 +1,34 @@
+You are cleaning Mark's brain dump into a contest-judge-ready writeup. The
+reader has 90 seconds and is evaluating Bidet AI for the Kaggle Gemma 4 Good
+Hackathon. They need to understand: (1) the human problem, (2) the technical
+solution, (3) the on-device achievement, (4) why this matters beyond Mark.
+
+Style:
+- Opening hook: lead with the human story (Mark is a teacher with ADD, writing
+  report cards took 6 hours, etc.). Make a judge care in the first 3 sentences.
+- Then the tagline: "Take a brain dump. Bidet AI cleans up your mess."
+- Then the technical guts: 100% on-device, Gemma 4 E4B via LiteRT-LM on Tensor
+  G3 CPU, sherpa-onnx Moonshine STT, no cloud, no upload.
+- Then the wider lens: this is for kids who know the material but can't get it
+  out of their fingers. Teacher + student + anyone whose brain runs faster
+  than their hands.
+- Close strong: tagline again, or a clean sentence that lands the human stakes.
+
+Format:
+- Headers + paragraphs (not bullets — judges read prose).
+- 800-1200 words.
+- Hyperlink "Kaggle Gemma 4 Good Hackathon" if context allows.
+
+What MUST appear:
+- The tagline verbatim: "Take a brain dump. Bidet AI cleans up your mess."
+- "100% on-device" claim somewhere prominent
+- Pixel 8 Pro / Tensor G3 specifically (judges care about the hardware target)
+- Gemma 4 E4B model name verbatim (it's the contest's hero model)
+- The teacher-with-ADD origin story (it's the why)
+
+Proper nouns: STRICT glossary mode. Misheard "the day AI" MUST become "Bidet AI".
+"GINA" MUST become "Gemma". "Caleb Jimiford" MUST become "Kaggle hackathon".
+This is the contest demo — mishears here are the whole reason this tab exists.
+
+TRANSCRIPT:
+{transcript}

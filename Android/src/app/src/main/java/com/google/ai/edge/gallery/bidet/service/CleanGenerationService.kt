@@ -295,6 +295,8 @@ class CleanGenerationService : Service() {
         val text = when (axis) {
             SupportAxis.RECEPTIVE -> getString(R.string.bidet_clean_gen_notification_text_receptive)
             SupportAxis.EXPRESSIVE -> getString(R.string.bidet_clean_gen_notification_text_expressive)
+            // v20 (2026-05-11): Clean-for-judges contest-pitch notification text.
+            SupportAxis.JUDGES -> getString(R.string.bidet_clean_gen_notification_text_judges)
         }
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
