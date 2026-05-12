@@ -33,10 +33,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
  * defined in [TabPref.Companion]. "Reset to default" is implemented by REMOVING the key —
  * the absence is what makes the defaults reappear.
  *
- * Why DataStore over a Room table: the dataset is exactly two rows of small strings, the
- * existing `Context.bidetDataStore` already exists in this codebase, and a Room migration
- * just to hold two key/value pairs is overkill. Tests run against the in-memory implementation
- * below so persistence is verifiable without Android.
+ * Why DataStore over a Room table: the dataset is a handful of short key/value pairs (one
+ * label + one prompt per axis — three axes as of v20), the existing `Context.bidetDataStore`
+ * already exists in this codebase, and a Room migration just to hold this much data is
+ * overkill. Tests run against the in-memory implementation below so persistence is verifiable
+ * without Android.
  */
 interface TabPrefRepository {
 
@@ -56,11 +57,14 @@ interface TabPrefRepository {
         fun labelKey(axis: SupportAxis): Preferences.Key<String> = when (axis) {
             SupportAxis.RECEPTIVE -> stringPreferencesKey("tab_pref_receptive_label")
             SupportAxis.EXPRESSIVE -> stringPreferencesKey("tab_pref_expressive_label")
+            // v20 (2026-05-11): JUDGES keys for the Clean-for-judges contest-pitch tab.
+            SupportAxis.JUDGES -> stringPreferencesKey("tab_pref_judges_label")
         }
 
         fun promptKey(axis: SupportAxis): Preferences.Key<String> = when (axis) {
             SupportAxis.RECEPTIVE -> stringPreferencesKey("tab_pref_receptive_prompt")
             SupportAxis.EXPRESSIVE -> stringPreferencesKey("tab_pref_expressive_prompt")
+            SupportAxis.JUDGES -> stringPreferencesKey("tab_pref_judges_prompt")
         }
     }
 }

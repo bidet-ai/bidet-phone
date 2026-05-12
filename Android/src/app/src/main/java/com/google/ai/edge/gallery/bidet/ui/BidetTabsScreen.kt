@@ -44,9 +44,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.ai.edge.gallery.R
 
 /**
- * Two-tab restructure (2026-05-10): RAW at the top of the screen as a reading base, then a
- * chip row of two GENERATED tabs below it ("Clean for me" and "Clean for others" by
- * default; both editable), and the active tab's generated content under that.
+ * Three-tab restructure (v20, 2026-05-11): RAW at the top of the screen as a reading base,
+ * then a chip row of THREE GENERATED tabs below it ("Clean for me" / "Clean for others" /
+ * "Clean for judges" by default; labels + prompts editable per axis), and the active tab's
+ * generated content under that. The third tab was added for the Kaggle Gemma 4 Good
+ * Hackathon contest writeup; see [SupportAxis.JUDGES].
  *
  * Vertical layout:
  *   ┌─────────────────────────────────────┐
@@ -58,6 +60,7 @@ import com.google.ai.edge.gallery.R
  *   ├─────────────────────────────────────┤
  *   │  Tab chip row: [Clean for me ✎]     │
  *   │                [Clean for others ✎] │
+ *   │                [Clean for judges ✎] │  ← v20 (2026-05-11)
  *   ├─────────────────────────────────────┤
  *   │  Active tab's generated content     │  ← Idle / Streaming / Cached
  *   └─────────────────────────────────────┘
@@ -81,6 +84,8 @@ fun BidetTabsScreen(
     val activeAxis by viewModel.activeAxis.collectAsStateWithLifecycle()
     val receptiveState by viewModel.receptiveState.collectAsStateWithLifecycle()
     val expressiveState by viewModel.expressiveState.collectAsStateWithLifecycle()
+    // v20 (2026-05-11): third state flow for the Clean-for-judges contest-pitch tab.
+    val judgesState by viewModel.judgesState.collectAsStateWithLifecycle()
 
     var editingAxis by remember { mutableStateOf<SupportAxis?>(null) }
 
@@ -144,6 +149,12 @@ fun BidetTabsScreen(
                         axis = SupportAxis.EXPRESSIVE,
                         state = expressiveState,
                         onGenerate = { viewModel.generateExpressive() },
+                    )
+                    // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
+                    SupportAxis.JUDGES -> CleanTabContent(
+                        axis = SupportAxis.JUDGES,
+                        state = judgesState,
+                        onGenerate = { viewModel.generateJudges() },
                     )
                 }
             }

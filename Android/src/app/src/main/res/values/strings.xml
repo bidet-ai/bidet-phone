@@ -55,6 +55,9 @@
   <string name="bidet_clean_gen_notification_title" translatable="false">Bidet AI is cleaning your brain dump</string>
   <string name="bidet_clean_gen_notification_text_receptive" translatable="false">Reshaping for you to read. This can take a few minutes.</string>
   <string name="bidet_clean_gen_notification_text_expressive" translatable="false">Reshaping for someone else to read. This can take a few minutes.</string>
+  <!-- v20 (2026-05-11): Clean-for-judges contest-pitch notification. Longer wall-clock
+       than the other two axes because the target output is ~800-1200 words. -->
+  <string name="bidet_clean_gen_notification_text_judges" translatable="false">Writing a contest-judge pitch. This takes longer than the other tabs.</string>
   <string name="bidet_clean_gen_cancel_action" translatable="false">Cancel</string>
   <string name="bidet_clean_gen_progress_label" translatable="false">Cleaning…</string>
   <string name="bidet_clean_gen_progress_format" translatable="false">%1$d / %2$d tokens</string>
@@ -100,6 +103,9 @@
   <!-- Idle hints shown below the chip row when a tab has not yet been generated. -->
   <string name="bidet_clean_for_me_idle_hint" translatable="false">Tap Generate to reshape your brain dump using this tab\'s prompt.</string>
   <string name="bidet_clean_for_others_idle_hint" translatable="false">Tap Generate to reshape your brain dump using this tab\'s prompt.</string>
+  <!-- v20 (2026-05-11): idle hint for the Clean-for-judges contest-pitch tab. Calls out
+       the longer wall-clock so users don\'t bail mid-decode thinking it\'s stuck. -->
+  <string name="bidet_clean_for_judges_idle_hint" translatable="false">Tap Generate to turn this brain dump into a Kaggle Gemma 4 contest writeup. Slower than the other tabs (~800-1200 words).</string>
   <!-- TODO(jingjin): Add translation support when i18n is ready. -->
   <string name="about_this_update" translatable="false">About this update</string>
   <string name="all" translatable="false">All</string>

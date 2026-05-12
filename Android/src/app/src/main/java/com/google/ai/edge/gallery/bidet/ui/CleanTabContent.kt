@@ -70,6 +70,9 @@ fun CleanTabContent(
     val idleHintRes = when (axis) {
         SupportAxis.RECEPTIVE -> R.string.bidet_clean_for_me_idle_hint
         SupportAxis.EXPRESSIVE -> R.string.bidet_clean_for_others_idle_hint
+        // v20 (2026-05-11): Clean-for-judges idle hint calls out the longer wall-clock
+        // so users don't bail mid-decode thinking the tab is stuck.
+        SupportAxis.JUDGES -> R.string.bidet_clean_for_judges_idle_hint
     }
     CleanTabBody(
         state = state,

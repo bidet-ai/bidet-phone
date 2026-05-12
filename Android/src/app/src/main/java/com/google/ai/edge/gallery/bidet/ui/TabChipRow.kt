@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,6 +79,19 @@ fun TabChipRow(
                 selected = selected,
                 onClick = { onSelectAxis(axis) },
                 label = { Text(pref.label) },
+                // v20 (2026-05-11): trophy leading icon on the JUDGES chip so the
+                // contest-pitch tab is visually distinct from the two everyday tabs even
+                // when Mark renames it. The other axes deliberately ship without a leading
+                // icon — pinning JUDGES alone keeps the row visually balanced and the
+                // contest-week affordance unmistakable.
+                leadingIcon = if (axis == SupportAxis.JUDGES) {
+                    {
+                        Icon(
+                            imageVector = Icons.Filled.EmojiEvents,
+                            contentDescription = null,
+                        )
+                    }
+                } else null,
             )
             if (editingEnabled) {
                 IconButton(

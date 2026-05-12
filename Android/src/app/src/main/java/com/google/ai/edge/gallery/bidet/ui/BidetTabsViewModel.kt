@@ -49,14 +49,15 @@ import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 
 /**
- * Top-level state holder for [BidetTabsScreen] under the two-tab restructure (2026-05-10):
+ * Top-level state holder for [BidetTabsScreen] under the three-tab restructure (v20,
+ * 2026-05-11; was two-tab 2026-05-10):
  *  - RAW lives at the top of the screen as a reading base, owned by the aggregator.
- *  - Two GENERATED tabs live below it. Both tabs' label + prompt template are user-editable
+ *  - THREE GENERATED tabs live below it. All tabs' label + prompt template are user-editable
  *    via [TabPrefEditorSheet]; persistence is delegated to [TabPrefRepository].
  *
- * Internal axis names ([SupportAxis.RECEPTIVE] / [SupportAxis.EXPRESSIVE]) are retained
- * because [com.google.ai.edge.gallery.bidet.service.CleanGenerationService] uses them to
- * pick a notification text and to keep the two streams distinguishable.
+ * Internal axis names ([SupportAxis.RECEPTIVE] / [SupportAxis.EXPRESSIVE] / [SupportAxis.JUDGES])
+ * are retained because [com.google.ai.edge.gallery.bidet.service.CleanGenerationService] uses
+ * them to pick a notification text and to keep the streams distinguishable.
  *
  * Generation flow (unchanged contract):
  *  1. Read the active [TabPref] for the axis.
@@ -90,8 +91,19 @@ class BidetTabsViewModel @Inject constructor(
     val expressiveState: StateFlow<TabState> = _expressiveState.asStateFlow()
 
     /**
-     * Live [TabPref] list — index 0 is the RECEPTIVE pref, index 1 is the EXPRESSIVE pref.
-     * The chip row + sheet editor read this; [refreshTabPrefs] reloads it from the repository.
+     * v20 (2026-05-11): JUDGES state flow. The Clean-for-judges contest-pitch tab targets
+     * ~800-1200 words of output — longer than the other two axes. Wall-clock on Tensor G3
+     * CPU at the standard 2048 maxNumTokens cap is ~6-10 min (documented in the v20 PR body).
+     * Same streaming contract as RECEPTIVE/EXPRESSIVE so the UI can render partial output
+     * as Gemma decodes.
+     */
+    private val _judgesState = MutableStateFlow<TabState>(TabState.Idle)
+    val judgesState: StateFlow<TabState> = _judgesState.asStateFlow()
+
+    /**
+     * Live [TabPref] list — index 0 is RECEPTIVE, index 1 is EXPRESSIVE, index 2 (v20) is
+     * JUDGES. The chip row + sheet editor read this; [refreshTabPrefs] reloads it from the
+     * repository.
      */
     private val _tabPrefs = MutableStateFlow<List<TabPref>>(
         SupportAxis.ALL.map { axis -> TabPref(axis, TabPref.defaultLabel(axis), "") }
@@ -113,6 +125,8 @@ class BidetTabsViewModel @Inject constructor(
     private var serviceConnection: ServiceConnection? = null
     private var receptiveObserverJob: Job? = null
     private var expressiveObserverJob: Job? = null
+    // v20 (2026-05-11): third observer job for the Clean-for-judges contest-pitch tab.
+    private var judgesObserverJob: Job? = null
     private val pendingCacheKey = mutableMapOf<SupportAxis, String>()
 
     init {
@@ -164,11 +178,22 @@ class BidetTabsViewModel @Inject constructor(
         generate(SupportAxis.EXPRESSIVE, _expressiveState, temperature)
     }
 
+    /**
+     * v20 (2026-05-11): trigger generation for the Clean-for-judges contest-pitch tab.
+     * Reuses the same single-call / chunked generation path as the other two axes — the
+     * longer ~800-1200 word target is enforced by the prompt body, not by a different
+     * token cap (RawChunker still chunks when input exceeds the ~700-token input ceiling).
+     */
+    fun generateJudges(temperature: Float = DEFAULT_TEMPERATURE) {
+        generate(SupportAxis.JUDGES, _judgesState, temperature)
+    }
+
     /** Trigger generation for the currently-selected axis. */
     fun generateActive(temperature: Float = DEFAULT_TEMPERATURE) {
         when (_activeAxis.value) {
             SupportAxis.RECEPTIVE -> generateReceptive(temperature)
             SupportAxis.EXPRESSIVE -> generateExpressive(temperature)
+            SupportAxis.JUDGES -> generateJudges(temperature)
         }
     }
 
@@ -189,6 +214,9 @@ class BidetTabsViewModel @Inject constructor(
             val promptVersion = when (axis) {
                 SupportAxis.RECEPTIVE -> PROMPT_VERSION_RECEPTIVE
                 SupportAxis.EXPRESSIVE -> PROMPT_VERSION_EXPRESSIVE
+                // v20 (2026-05-11): JUDGES cache key uses its own version tag so a future
+                // edit to the contest-pitch prompt invalidates only JUDGES cached outputs.
+                SupportAxis.JUDGES -> PROMPT_VERSION_JUDGES
             }
             val key = sha256("$rawSha|$promptVersion|$promptHash|$temperature")
             val cached = readCache(key)
@@ -264,6 +292,9 @@ class BidetTabsViewModel @Inject constructor(
     fun resetTabs() {
         _receptiveState.value = TabState.Idle
         _expressiveState.value = TabState.Idle
+        // v20 (2026-05-11): reset the Clean-for-judges tab when a new recording starts so
+        // a previous session's contest writeup doesn't leak onto the new dump.
+        _judgesState.value = TabState.Idle
     }
 
     private fun bindCleanGenerationService() {
@@ -279,6 +310,13 @@ class BidetTabsViewModel @Inject constructor(
                 expressiveObserverJob?.cancel()
                 expressiveObserverJob = viewModelScope.launch {
                     svc.stateFlow.collect { handleServiceState(it, SupportAxis.EXPRESSIVE) }
+                }
+                // v20 (2026-05-11): third observer for the Clean-for-judges tab. Same
+                // filter-on-axis pattern — events for RECEPTIVE/EXPRESSIVE land in their
+                // respective collectors via [handleServiceState]'s axis check.
+                judgesObserverJob?.cancel()
+                judgesObserverJob = viewModelScope.launch {
+                    svc.stateFlow.collect { handleServiceState(it, SupportAxis.JUDGES) }
                 }
             }
             override fun onServiceDisconnected(name: ComponentName?) {
@@ -351,6 +389,8 @@ class BidetTabsViewModel @Inject constructor(
         super.onCleared()
         receptiveObserverJob?.cancel()
         expressiveObserverJob?.cancel()
+        // v20 (2026-05-11): cancel the third observer job alongside the original two.
+        judgesObserverJob?.cancel()
         serviceConnection?.let {
             try { context.unbindService(it) } catch (_: Throwable) { /* never bound or already unbound */ }
         }
@@ -361,6 +401,7 @@ class BidetTabsViewModel @Inject constructor(
     private fun stateFlowFor(axis: SupportAxis): MutableStateFlow<TabState> = when (axis) {
         SupportAxis.RECEPTIVE -> _receptiveState
         SupportAxis.EXPRESSIVE -> _expressiveState
+        SupportAxis.JUDGES -> _judgesState
     }
 
     /** Snapshot of the current RAW transcript (used by the always-visible RAW reading base). */
@@ -371,6 +412,10 @@ class BidetTabsViewModel @Inject constructor(
         // the cache key absorbs day-to-day prompt edits.
         const val PROMPT_VERSION_RECEPTIVE: String = "v2"
         const val PROMPT_VERSION_EXPRESSIVE: String = "v2"
+        // v20 (2026-05-11): version tag for the Clean-for-judges contest-pitch tab. Bumping
+        // this invalidates only JUDGES cached outputs — the other two axes keep their
+        // cached generations through a contest-prompt iteration.
+        const val PROMPT_VERSION_JUDGES: String = "v1"
 
         const val DEFAULT_TEMPERATURE: Float = 0.3f
         const val CLEAN_TAB_OUTPUT_TOKEN_CAP: Int = 2048
@@ -391,6 +436,8 @@ class BidetTabsViewModel @Inject constructor(
             val tag = when (axis) {
                 SupportAxis.RECEPTIVE -> "receptive"
                 SupportAxis.EXPRESSIVE -> "expressive"
+                // v20 (2026-05-11): JUDGES debug-override key for the Clean-for-judges tab.
+                SupportAxis.JUDGES -> "judges"
             }
             return stringPreferencesKey("bidet_prompt_override_$tag")
         }

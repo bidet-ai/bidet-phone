@@ -88,11 +88,12 @@ import kotlinx.coroutines.withContext
  * editable tabs, then the active tab's content body. The persisted [BidetSession] row is
  * the source of truth for RAW + the cached outputs.
  *
- * Persistence mapping retained from Phase 4A:
- *   bidet_sessions.cleanCached  ← Receptive  (Clean for me)  output
+ * Persistence mapping retained from Phase 4A, extended in v20:
+ *   bidet_sessions.cleanCached  ← Receptive  (Clean for me)     output
  *   bidet_sessions.foraiCached  ← Expressive (Clean for others) output
+ *   bidet_sessions.judgesCached ← Judges     (Clean for judges) output   (v20, 2026-05-11)
  *
- * Editing tab labels/prompts here updates the global [TabPref] (the same pair the live
+ * Editing tab labels/prompts here updates the global [TabPref] (the same triple the live
  * recorder uses) — that's intentional. Renaming "Clean for others" to "Email tone" while
  * looking at yesterday's brain dump should make tomorrow's chip row read "Email tone" too.
  */
@@ -110,6 +111,8 @@ fun SessionDetailScreen(
     val activeAxis by viewModel.activeAxis.collectAsStateWithLifecycle()
     val receptiveState by viewModel.receptiveState.collectAsStateWithLifecycle()
     val expressiveState by viewModel.expressiveState.collectAsStateWithLifecycle()
+    // v20 (2026-05-11): third state flow for the Clean-for-judges contest-pitch tab.
+    val judgesState by viewModel.judgesState.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     var editingAxis by remember { mutableStateOf<SupportAxis?>(null) }
@@ -241,6 +244,12 @@ fun SessionDetailScreen(
                         state = expressiveState,
                         onGenerate = { viewModel.generate(SupportAxis.EXPRESSIVE) },
                     )
+                    // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
+                    SupportAxis.JUDGES -> CleanTabContent(
+                        axis = SupportAxis.JUDGES,
+                        state = judgesState,
+                        onGenerate = { viewModel.generate(SupportAxis.JUDGES) },
+                    )
                 }
             }
         }
@@ -300,6 +309,8 @@ class SessionDetailViewModel @Inject constructor(
     private var serviceConnection: ServiceConnection? = null
     private var receptiveObserverJob: Job? = null
     private var expressiveObserverJob: Job? = null
+    // v20 (2026-05-11): third observer job for the Clean-for-judges contest-pitch tab.
+    private var judgesObserverJob: Job? = null
 
     init {
         bindCleanGenerationService()
@@ -310,6 +321,9 @@ class SessionDetailViewModel @Inject constructor(
         sessionIdFlow.value = sessionId
         _receptiveState.value = TabState.Idle
         _expressiveState.value = TabState.Idle
+        // v20 (2026-05-11): reset the Clean-for-judges state on rebind so a stale snapshot
+        // from a previously-bound session doesn't bleed into the new one.
+        _judgesState.value = TabState.Idle
         viewModelScope.launch {
             val row = sessionDao.getById(sessionId) ?: return@launch
             val receptive = row.cleanCached ?: row.analysisCached
@@ -318,6 +332,11 @@ class SessionDetailViewModel @Inject constructor(
             }
             row.foraiCached?.let {
                 _expressiveState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs)
+            }
+            // v20 (2026-05-11): seed the JUDGES tab from its persisted column so re-opens
+            // are instant for a session that already has a contest writeup.
+            row.judgesCached?.let {
+                _judgesState.value = TabState.Cached(it, row.endedAtMs ?: row.startedAtMs)
             }
         }
         viewModelScope.launch { refreshTabPrefs() }
@@ -348,6 +367,14 @@ class SessionDetailViewModel @Inject constructor(
 
     private val _expressiveState = MutableStateFlow<TabState>(TabState.Idle)
     val expressiveState: StateFlow<TabState> = _expressiveState.asStateFlow()
+
+    /**
+     * v20 (2026-05-11): JUDGES state flow for the Clean-for-judges contest-pitch tab. Same
+     * streaming contract as the other two axes. Seeded from [BidetSession.judgesCached] in
+     * [bind] so re-opens are instant for a session whose contest writeup already exists.
+     */
+    private val _judgesState = MutableStateFlow<TabState>(TabState.Idle)
+    val judgesState: StateFlow<TabState> = _judgesState.asStateFlow()
 
     private val _tabPrefs = MutableStateFlow<List<TabPref>>(
         SupportAxis.ALL.map { axis -> TabPref(axis, TabPref.defaultLabel(axis), "") }
@@ -479,6 +506,13 @@ class SessionDetailViewModel @Inject constructor(
                 expressiveObserverJob = viewModelScope.launch {
                     svc.stateFlow.collect { handleServiceState(it, SupportAxis.EXPRESSIVE) }
                 }
+                // v20 (2026-05-11): third observer for the Clean-for-judges tab. Same
+                // axis-filter pattern as the other two so events for one tab can't echo
+                // into another's collector.
+                judgesObserverJob?.cancel()
+                judgesObserverJob = viewModelScope.launch {
+                    svc.stateFlow.collect { handleServiceState(it, SupportAxis.JUDGES) }
+                }
             }
             override fun onServiceDisconnected(name: ComponentName?) {
                 boundService = null
@@ -514,6 +548,9 @@ class SessionDetailViewModel @Inject constructor(
                         when (observerAxis) {
                             SupportAxis.RECEPTIVE -> sessionDao.updateCleanCached(mySessionId, state.text)
                             SupportAxis.EXPRESSIVE -> sessionDao.updateForaiCached(mySessionId, state.text)
+                            // v20 (2026-05-11): JUDGES cache lands in its own column so the
+                            // 800-1200 word contest writeup persists across re-opens.
+                            SupportAxis.JUDGES -> sessionDao.updateJudgesCached(mySessionId, state.text)
                         }
                     } catch (_: Throwable) { /* row write failure is non-fatal — text is already visible */ }
                 }
@@ -529,6 +566,8 @@ class SessionDetailViewModel @Inject constructor(
         super.onCleared()
         receptiveObserverJob?.cancel()
         expressiveObserverJob?.cancel()
+        // v20 (2026-05-11): cancel the third observer job alongside the original two.
+        judgesObserverJob?.cancel()
         serviceConnection?.let { context.unbindService(it) }
         serviceConnection = null
         boundService = null
@@ -559,5 +598,6 @@ class SessionDetailViewModel @Inject constructor(
     private fun stateFlowFor(axis: SupportAxis): MutableStateFlow<TabState> = when (axis) {
         SupportAxis.RECEPTIVE -> _receptiveState
         SupportAxis.EXPRESSIVE -> _expressiveState
+        SupportAxis.JUDGES -> _judgesState
     }
 }

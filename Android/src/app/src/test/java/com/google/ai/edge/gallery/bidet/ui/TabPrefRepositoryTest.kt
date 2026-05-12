@@ -157,8 +157,10 @@ class TabPrefRepositoryTest {
     }
 
     /**
-     * DataStore key uniqueness — two axes must not collide on the same key. Lightweight
-     * assertion that the keys are distinct so a future refactor can't silently merge them.
+     * DataStore key uniqueness — axes must not collide on the same key. Lightweight assertion
+     * that the keys are distinct so a future refactor can't silently merge them.
+     *
+     * v20 (2026-05-11): JUDGES axis added — verify its keys don't collide with the other two.
      */
     @Test
     fun perAxisKeysAreDistinct() {
@@ -167,13 +169,33 @@ class TabPrefRepositoryTest {
             TabPrefRepository.labelKey(SupportAxis.EXPRESSIVE),
         )
         assertNotEquals(
+            TabPrefRepository.labelKey(SupportAxis.RECEPTIVE),
+            TabPrefRepository.labelKey(SupportAxis.JUDGES),
+        )
+        assertNotEquals(
+            TabPrefRepository.labelKey(SupportAxis.EXPRESSIVE),
+            TabPrefRepository.labelKey(SupportAxis.JUDGES),
+        )
+        assertNotEquals(
             TabPrefRepository.promptKey(SupportAxis.RECEPTIVE),
             TabPrefRepository.promptKey(SupportAxis.EXPRESSIVE),
+        )
+        assertNotEquals(
+            TabPrefRepository.promptKey(SupportAxis.RECEPTIVE),
+            TabPrefRepository.promptKey(SupportAxis.JUDGES),
+        )
+        assertNotEquals(
+            TabPrefRepository.promptKey(SupportAxis.EXPRESSIVE),
+            TabPrefRepository.promptKey(SupportAxis.JUDGES),
         )
         // label and prompt within an axis also distinct.
         assertNotEquals(
             TabPrefRepository.labelKey(SupportAxis.RECEPTIVE),
             TabPrefRepository.promptKey(SupportAxis.RECEPTIVE),
+        )
+        assertNotEquals(
+            TabPrefRepository.labelKey(SupportAxis.JUDGES),
+            TabPrefRepository.promptKey(SupportAxis.JUDGES),
         )
     }
 }

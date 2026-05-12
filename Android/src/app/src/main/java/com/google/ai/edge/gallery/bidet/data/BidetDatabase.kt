@@ -29,6 +29,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *  - v2 (2026-05-10, Bug-3 fix): adds `mergedChunkCount INTEGER NOT NULL DEFAULT 0` so the
  *    History UI can render "Transcribing N of M chunks…" while the worker is still draining
  *    the queue after the user tapped Stop. See [MIGRATION_1_2].
+ *  - v3 (v20, 2026-05-11): adds nullable `judgesCached` column so the Clean-for-judges
+ *    contest-pitch tab persists its output across re-opens (decode takes 6-10 min on Tensor
+ *    G3 CPU for the longer 800-1200 word target — regenerating is expensive). See
+ *    [MIGRATION_2_3].
  *
  * Schema export is intentionally disabled — exhaustive Migration testing is in
  * `BidetMigrationTest`; we don't need to ship JSON schemas yet.
@@ -38,7 +42,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 @Database(
     entities = [BidetSession::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class BidetDatabase : RoomDatabase() {
@@ -57,6 +61,18 @@ abstract class BidetDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE bidet_sessions ADD COLUMN mergedChunkCount INTEGER NOT NULL DEFAULT 0"
                 )
+            }
+        }
+
+        /**
+         * v2 → v3: ALTER TABLE to add the nullable `judgesCached` column for the v20
+         * Clean-for-judges contest-pitch cache. NULL backfill matches the other axis caches
+         * (`cleanCached`, `analysisCached`, `foraiCached`) — re-opens on existing rows show
+         * the Judges tab in Idle until the user taps Generate.
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE bidet_sessions ADD COLUMN judgesCached TEXT")
             }
         }
     }
