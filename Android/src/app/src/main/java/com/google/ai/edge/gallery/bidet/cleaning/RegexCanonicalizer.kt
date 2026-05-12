@@ -143,7 +143,9 @@ object RegexCanonicalizer {
         rule("""\bTensor\s+G\s*3+\b""", "Tensor G3"),
 
         // --- Pixel 8 Pro ---
-        rule("""\bPixel(?:ate|let)\s+(?:Pro|pro)\b""", "Pixel 8 Pro"),
+        // Observed mishears: "Pixelate Pro", "Pixelet Pro" (note single 'l' before 'e').
+        // The regex covers single-l (et), double-l (let) and -ate variants.
+        rule("""\bPixel(?:ate|et|let)\s+(?:Pro|pro)\b""", "Pixel 8 Pro"),
 
         // --- LiteRT-LM ---
         rule("""\bLight\s+RT\s*L\s*M\b""", "LiteRT-LM"),
