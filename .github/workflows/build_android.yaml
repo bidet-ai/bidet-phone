@@ -25,7 +25,9 @@ on:
     # v18.8 (2026-05-11): added feat/chunked-cleaning-* so PRs stacked on the v18
     # chunked-cleaning branch (e.g. feat/v18.8-glossary, feat/session-export-v19)
     # trigger CI before the parent branch merges to main.
-    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*", "feat/chunked-cleaning-*"]
+    # 2026-05-11: added feat/v18.8-* so PRs stacked on feat/v18.8-glossary
+    # (e.g. feat/stable-debug-keystore) trigger CI before v18.8 merges to main.
+    branches: [main, "feat/v0.1-phase-*", "fix/v0.1-phase-*", "feat/chunked-cleaning-*", "feat/v18.8-*"]
 
 jobs:
   build:
@@ -74,6 +76,30 @@ jobs:
 
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug
+
+      # 2026-05-11: print debug APK signing-cert SHA-1 fingerprint so future
+      # investigations can verify the stable debug.keystore is being used across
+      # builds (and not the AGP-auto-generated random fallback). If the SHA-1
+      # ever changes between CI runs, `adb install -r` will fail with
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE and we need to know why.
+      - name: Print debug APK signing-cert fingerprint
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -n1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found under $ANDROID_HOME/build-tools — skipping fingerprint print."
+            exit 0
+          fi
+          echo "Using apksigner: $APKSIGNER"
+          for apk in \
+            app/build/outputs/apk/moonshine/debug/app-moonshine-debug.apk \
+            app/build/outputs/apk/gemma/debug/app-gemma-debug.apk; do
+            if [ -f "$apk" ]; then
+              echo "===== $apk ====="
+              "$APKSIGNER" verify --print-certs "$apk" | grep -E "SHA-1|SHA-256|Subject" || true
+            else
+              echo "$apk not found (skipped)"
+            fi
+          done
 
       - name: Decode release keystore (only on tag push)
         if: startsWith(github.ref, 'refs/tags/v')
