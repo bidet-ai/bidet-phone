@@ -59,7 +59,12 @@ object Glossary {
      * is the reason the model can recover the canonical spelling — those are the surface
      * forms Moonshine actually produces.
      */
-    const val BIDET_GLOSSARY: String = """PROJECT VOCABULARY — Mark uses these proper nouns. Moonshine often mishears
+    const val BIDET_GLOSSARY: String = """MANDATORY SUBSTITUTION RULES — apply BEFORE writing your output. Any occurrence
+of the LEFT side in the user's text must be replaced with the RIGHT side. Do
+not leave the LEFT side in your output. This is not optional context — it is
+a substitution table you must apply.
+
+PROJECT VOCABULARY — Mark uses these proper nouns. Moonshine often mishears
 them; canonicalize when context clearly refers to one of these. NEVER invent.
 
 Canonical (mishears observed):
@@ -107,5 +112,5 @@ cleans up your mess".
 
     /** First-line marker used by [withGlossary]'s idempotency guard. */
     private const val GLOSSARY_HEADER: String =
-        "PROJECT VOCABULARY — Mark uses these proper nouns."
+        "MANDATORY SUBSTITUTION RULES — apply BEFORE writing your output."
 }

@@ -80,9 +80,16 @@ class GlossaryTest {
         val base = "You are reorganizing a verbatim spoken transcript. Rules: ..."
         val wrapped = Glossary.withGlossary(base)
 
+        // v18.9 (2026-05-11): the preamble now leads with imperative substitution
+        // rules so Gemma 4 E4B int4 treats the glossary as a table to APPLY rather
+        // than context to consider. The PROJECT VOCABULARY block follows.
         assertTrue(
-            "wrapped prompt should start with the glossary header:\n$wrapped",
-            wrapped.startsWith("PROJECT VOCABULARY"),
+            "wrapped prompt should start with the mandatory-rules header:\n$wrapped",
+            wrapped.startsWith("MANDATORY SUBSTITUTION RULES"),
+        )
+        assertTrue(
+            "wrapped prompt should still contain the PROJECT VOCABULARY block:\n$wrapped",
+            wrapped.contains("PROJECT VOCABULARY"),
         )
         assertTrue(
             "wrapped prompt should still contain the base body:\n$wrapped",
