@@ -89,6 +89,15 @@ object TranscriptSanitizer {
         out = MULTI_SPACE.replace(out, " ")
         out = MULTI_COMMA.replace(out, ",")
 
+        // 8) v18.9 (2026-05-11): canonicalize project-noun mishears via a pure-regex
+        //    pass. v18.8 relied on the cleaning prompt's glossary preamble to do this,
+        //    but Gemma 4 E4B int4 on Tensor G3 wasn't consistently applying the
+        //    substitution table in production. Doing it here means every chunk's RAW
+        //    text is canonicalized BEFORE it lands in the stitched buffer that
+        //    ChunkCleaner sees — Gemma gets clean canonical names. The glossary
+        //    preamble stays in place as defense-in-depth for novel mishears.
+        out = RegexCanonicalizer.apply(out)
+
         return out.trim()
     }
 
