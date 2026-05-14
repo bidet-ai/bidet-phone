@@ -172,12 +172,23 @@ class CleanGenerationService : Service() {
         // suspendCancellableCoroutine → Conversation.cancelProcess.
         generationJob = scope.launch(Dispatchers.Default) {
             try {
-                // Gemma 4 E2B has a hard 2048-token context cap. With tokenCap reserved for
-                // output and the system prompt budget, the per-call input ceiling is ~700
-                // tokens (≈2400 chars of English). Split longer RAW dumps into windows,
-                // clean each on-device, and stitch. Short dumps still take the single-call
-                // path so behaviour for sub-7-minute sessions is byte-identical.
-                val windows = RawChunker.chunk(userPrompt)
+                // Gemma 4 E2B has a hard 2048-token context cap. With tokenCap reserved
+                // for output and the system prompt budget, the per-call input ceiling is
+                // ~700 tokens (≈2400 chars of English) — but only when the system prompt
+                // is short. Today's prompts are:
+                //   - RECEPTIVE: glossary (~1411 c) + receptive_default (~683 c) ≈ ~830 tok
+                //   - EXPRESSIVE: glossary + expressive_default (~790 c) ≈ ~880 tok
+                //   - JUDGES: glossary + judges_default (~1685 c) ≈ ~1240 tok
+                // Pass the actual systemPrompt to [RawChunker.chunkForPrompt] so the per-
+                // window budget tracks the axis — JUDGES gets smaller windows than
+                // RECEPTIVE, eliminating the "input token IDs too long ... 2634 ≥ 1024"
+                // overflow that long brain dumps hit on the JUDGES axis. See RawChunker
+                // kdoc for the sizing math.
+                val windows = RawChunker.chunkForPrompt(
+                    raw = userPrompt,
+                    systemPrompt = systemPrompt,
+                    perChunkOutputCap = CHUNKED_PER_WINDOW_OUTPUT_TOKEN_CAP,
+                )
                 val finalText = if (windows.size <= 1) {
                     gemma.runInferenceStreaming(
                         systemPrompt = systemPrompt,
