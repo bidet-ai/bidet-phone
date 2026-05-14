@@ -133,8 +133,12 @@ private fun InlinePromptEditor(state: InlinePromptState) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            // v24 (2026-05-14): bumped horizontal padding 16 → 20 dp + vertical 8 → 12 dp.
+            // Mark feedback: "boxes were really, really tiny... spacing on the page
+            // was way off." Tighter 8 dp vertical packed the prompt block against the
+            // chip row above + the output below; 12 dp gives a discernible gap.
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -142,6 +146,10 @@ private fun InlinePromptEditor(state: InlinePromptState) {
         ) {
             Text(
                 text = "Prompt",
+                // v24 (2026-05-14): explicit titleMedium (~16sp) for the "Prompt" header.
+                // Default Text inherits bodyMedium which was indistinguishable from the
+                // preview line below it.
+                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
@@ -154,7 +162,9 @@ private fun InlinePromptEditor(state: InlinePromptState) {
             // bumping into the output area.
             Text(
                 text = draft.take(120).let { if (draft.length > 120) "$it…" else it },
-                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                // v24 (2026-05-14): bumped from bodySmall (~12sp) to bodyMedium (~14sp)
+                // — the collapsed preview was readable only by squinting.
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                 color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
@@ -163,8 +173,17 @@ private fun InlinePromptEditor(state: InlinePromptState) {
                 onValueChange = { draft = it },
                 label = { Text("System prompt") },
                 modifier = Modifier.fillMaxWidth(),
-                minLines = 4,
+                // v24 (2026-05-14): bumped minLines 4 → 6 so the text-input area is
+                // comfortable to read/edit on a Pixel 8 Pro. The maxLines = 10 keeps
+                // the chip row + clean output area visible when the editor is
+                // expanded.
+                minLines = 6,
                 maxLines = 10,
+                // v24 (2026-05-14): explicit bodyLarge so the editor text matches the
+                // RAW tab's reading style. Default text-field typography defers to
+                // theme's bodyLarge already, but making it explicit defends against a
+                // future theme tweak that would shrink it.
+                textStyle = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -210,18 +229,34 @@ private fun CleanTabBody(
     val cleanOutputStyle: TextStyle = cleanTabBodyStyle(cleanFontChoice)
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            // v24 (2026-05-14): bumped padding 16 → 20 dp horizontal + 16 dp vertical
+            // so the cleaned-output body has breathing room from the screen edges +
+            // the chip row above. Matches the RawTabContent padding update.
+            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        // v24 (2026-05-14): bumped inter-element spacing 12 → 16 dp so the progress
+        // bar / partial-text / button stack reads as discrete blocks instead of a
+        // crammed strip.
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.Start,
     ) {
         when (state) {
             is TabState.Idle -> {
-                Text(idleHint)
+                // v24 (2026-05-14): explicit bodyLarge so the idle hint is readable.
+                Text(
+                    text = idleHint,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                )
                 Spacer(Modifier.height(4.dp))
                 Button(onClick = onGenerate) { Text(generateLabel) }
             }
             is TabState.Generating -> {
-                Text(stringResource(R.string.bidet_clean_gen_progress_label))
+                Text(
+                    stringResource(R.string.bidet_clean_gen_progress_label),
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                )
                 CircularProgressIndicator()
             }
             is TabState.Streaming -> {

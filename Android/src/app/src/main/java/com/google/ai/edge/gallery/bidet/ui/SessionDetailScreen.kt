@@ -219,6 +219,13 @@ fun SessionDetailScreen(
             }
 
             // RAW reading base — always visible.
+            // v24 (2026-05-14): re-weighted the RAW base + the clean tab body. v22's
+            // 1f/1f split made each pane half-screen, which (combined with the small
+            // default Text typography) is what Mark flagged: "the boxes, the text
+            // boxes were really, really tiny for reading." Bumped to 1f RAW + 1.4f
+            // clean-tab so the active generation/cleaned-output area is the visual
+            // anchor of the screen and the RAW base is still a comfortable reading
+            // height for a 3-min brain dump.
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 RawTabContent(rawText = session.rawText, isRecording = false)
             }
@@ -253,7 +260,7 @@ fun SessionDetailScreen(
                 },
             )
 
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1.4f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
                         axis = SupportAxis.RECEPTIVE,

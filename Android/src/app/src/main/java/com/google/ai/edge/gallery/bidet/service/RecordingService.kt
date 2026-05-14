@@ -45,13 +45,13 @@ import com.google.ai.edge.gallery.bidet.audio.AudioCaptureEngine
 import com.google.ai.edge.gallery.bidet.audio.WavConcatenator
 import com.google.ai.edge.gallery.bidet.chunk.ChunkQueue
 import com.google.ai.edge.gallery.bidet.cleaning.ChunkCleaner
-import com.google.ai.edge.gallery.bidet.cleaning.Glossary
+// v24 (2026-05-14): Glossary + SupportAxis + TabPref imports were dropped along with the
+// per-chunk pre-cleaning code path during recording. They remain referenced by the
+// SessionDetail-driven on-tap cleaning, which is now the only cleaning path.
 import com.google.ai.edge.gallery.bidet.data.BidetSession
 import com.google.ai.edge.gallery.bidet.data.BidetSessionDao
 import com.google.ai.edge.gallery.bidet.transcript.TranscriptAggregator
 import com.google.ai.edge.gallery.bidet.ui.BidetGemmaClient
-import com.google.ai.edge.gallery.bidet.ui.SupportAxis
-import com.google.ai.edge.gallery.bidet.ui.TabPref
 import com.google.ai.edge.gallery.bidet.transcription.TranscriptionEngine
 import com.google.ai.edge.gallery.bidet.transcription.TranscriptionWorker
 import dagger.hilt.android.AndroidEntryPoint
@@ -92,11 +92,14 @@ class RecordingService : Service() {
     @Inject lateinit var sessionDao: BidetSessionDao
 
     /**
-     * Path B (2026-05-10): used by the per-chunk pre-cleaner. Optional because the
-     * dependency graph builds successfully even if the LiteRT-LM Gemma backend isn't
-     * present (whisper-only test flavors). When null, [ChunkCleaner] simply isn't started
-     * and Clean for me falls back to the on-tap chunked path.
+     * v24 (2026-05-14): formerly used by the per-chunk [ChunkCleaner] (now disabled
+     * during recording per the STT-first ordering pivot — see [performAsyncStartup]).
+     * Kept on the @Inject graph because the Hilt module's BidetGemmaClient binding is
+     * still required by the SessionDetail on-tap cleaning path; removing this field
+     * doesn't shrink the graph. If a future v25 reinstates Path B, this is where the
+     * cleaner gets its LLM handle from.
      */
+    @Suppress("unused")
     @Inject lateinit var gemmaClient: BidetGemmaClient
 
     /** Path B (2026-05-10): per-session pre-cleaner, lifecycle scoped to one recording. */
@@ -300,35 +303,26 @@ class RecordingService : Service() {
     private suspend fun performAsyncStartup() {
         val sessionId = UUID.randomUUID().toString()
         val chunkQueue = ChunkQueue()
-        // Bug-1 fix (2026-05-10): the aggregator persists synchronously inside its own
-        // mutex via this onMutation callback. We bind sessionId by closure so a captured
-        // reference can't drift if a future caller restructures startup flow. Failures
-        // inside the lambda are absorbed by the aggregator (logged but not rethrown) so a
-        // transient DB write never breaks transcription.
-        // Path B (2026-05-10): per-chunk pre-cleaner. Start it BEFORE creating the
-        // aggregator so the onChunkAppended callback has somewhere to enqueue. If anything
-        // here throws (missing prompt asset, model not ready, external dir unavailable),
-        // log and fall through — the aggregator still works without it, on-tap cleaning is
-        // the existing path.
-        val cleaner: ChunkCleaner? = try {
-            val externalRoot = getExternalFilesDir(null)
-                ?: throw IllegalStateException("getExternalFilesDir returned null")
-            val sessionDir = File(externalRoot, "sessions/$sessionId")
-            sessionDir.mkdirs()
-            val cleanForMePromptBase = assets.open(TabPref.defaultPromptAssetPath(SupportAxis.RECEPTIVE))
-                .bufferedReader().use { it.readText() }
-            // v18.8 (2026-05-11): prepend the project-noun glossary so Gemma canonicalizes
-            // Moonshine mishears like "the day AI" → "Bidet AI" during per-chunk cleaning.
-            val cleanForMePrompt = Glossary.withGlossary(cleanForMePromptBase)
-            ChunkCleaner(
-                sessionExternalDir = sessionDir,
-                gemma = gemmaClient,
-                cleanForMePrompt = cleanForMePrompt,
-            ).also { it.start() }
-        } catch (t: Throwable) {
-            Log.w(TAG, "ChunkCleaner init failed; falling back to on-tap clean: ${t.message}", t)
-            null
-        }
+        // v24 (2026-05-14): STT-first runtime ordering — the per-chunk ChunkCleaner is
+        // DISABLED during recording. Path A (on-tap cleaning at the SessionDetail screen)
+        // is the production path. Rationale: Path B's ChunkCleaner acquires the shared
+        // LiteRT-LM Gemma engine (2.4 GB resident on E2B) during recording, which fights
+        // Moonshine STT for memory + CPU. Mark's v23 symptom: a 3-min brain dump only
+        // transcribed the first chunk because the engine mutex was held by a cleaner run
+        // when Moonshine tried to transcribe chunk 1. With cleaner disabled, Moonshine has
+        // the device to itself during recording and the live RAW transcript appears
+        // chunk-by-chunk exactly as the contest narrative promises.
+        //
+        // Cleaning still happens — just lazily, after Stop, when the user taps the Clean /
+        // Analysis / Judges tab on SessionDetail. That's exactly Mark's approved trade-off:
+        // "moonshine had done his thing as quickly as possible. And then... the Gemma, the
+        //  one that's taken a few minutes."
+        //
+        // Path B can be reinstated by a future opt-in setting; the code path stays
+        // exercised by [ChunkCleaner]'s unit tests + [SessionDetailViewModel.generate]'s
+        // pre-cleaned-on-disk short-circuit (which gracefully no-ops if no cleanings
+        // file is present, falling through to the on-tap clean).
+        val cleaner: ChunkCleaner? = null
         chunkCleaner = cleaner
 
         val aggregator = TranscriptAggregator(

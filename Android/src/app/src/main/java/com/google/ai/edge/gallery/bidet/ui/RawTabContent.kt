@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -76,7 +77,13 @@ fun RawTabContent(rawText: String, isRecording: Boolean) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            // v24 (2026-05-14): bumped outer padding 16 → 20 dp so the RAW body has
+            // breathing room from screen edges. Mark feedback on v22/v23: "the boxes,
+            // the text boxes were really, really tiny for reading and that kind of
+            // thing. So the spacing on the page was way off." 20 dp matches the
+            // SessionDetail Scaffold's contentPadding plus a touch more on the sides
+            // for the autoscroll case.
+            .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
         Column(
             modifier = Modifier
@@ -93,12 +100,20 @@ fun RawTabContent(rawText: String, isRecording: Boolean) {
                 text = rawText.ifEmpty {
                     if (isRecording) "Listening..." else "Tap the microphone to begin recording."
                 },
+                // v24 (2026-05-14): explicit bodyLarge typography (was relying on the
+                // default Text() which inherits bodyMedium ≈ 14sp). bodyLarge ≈ 16sp
+                // matches what the Material3 spec recommends for "primary reading
+                // content" and brings the RAW transcript out of "really, really tiny"
+                // territory.
+                style = MaterialTheme.typography.bodyLarge,
                 modifier = if (rawText.isNotEmpty()) {
-                    Modifier.combinedClickable(
-                        onClick = { /* tap is no-op — long-press copies, Copy button is primary */ },
-                        onLongClick = { copyRawToClipboard(context, rawText) },
-                    )
-                } else Modifier,
+                    Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = { /* tap is no-op — long-press copies, Copy button is primary */ },
+                            onLongClick = { copyRawToClipboard(context, rawText) },
+                        )
+                } else Modifier.fillMaxWidth(),
             )
         }
 

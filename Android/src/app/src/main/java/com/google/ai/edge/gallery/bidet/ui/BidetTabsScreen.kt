@@ -123,7 +123,10 @@ fun BidetTabsScreen(
                 )
             }
 
-            // RAW reading base — always visible. Takes ~half the screen via weight.
+            // RAW reading base — always visible.
+            // v24 (2026-05-14): re-weighted to 1f RAW + 1.4f clean-tab to match the
+            // SessionDetail layout. v22's 1f/1f made each pane look cramped. Mark's
+            // feedback: "the boxes, the text boxes were really, really tiny."
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 RawTabContent(rawText = raw, isRecording = isRecording)
             }
@@ -158,8 +161,9 @@ fun BidetTabsScreen(
                 },
             )
 
-            // Active-axis generated body. Takes the other half of the screen.
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // Active-axis generated body. v24 (2026-05-14): weight(1.4f) so the
+            // clean tab area is the visual anchor of the screen post-Stop.
+            Box(modifier = Modifier.fillMaxWidth().weight(1.4f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
                         axis = SupportAxis.RECEPTIVE,
