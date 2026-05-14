@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -137,6 +138,26 @@ fun BidetTabsScreen(
                 editingEnabled = true,
             )
 
+            // v22 (2026-05-13): inline expressive-prompt editor state. Read the default
+            // off the asset bundle once so the Reset button has the canonical fallback.
+            // The current prompt comes from tabPrefs (user override > default).
+            val expressiveDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.EXPRESSIVE)
+            }
+            val expressivePref = tabPrefs.firstOrNull { it.axis == SupportAxis.EXPRESSIVE }
+            val expressivePromptText = expressivePref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: expressiveDefault
+            val expressiveInlinePrompt = InlinePromptState(
+                currentPrompt = expressivePromptText,
+                defaultPrompt = expressiveDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = expressivePref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.EXPRESSIVE)
+                    viewModel.saveTabPref(TabPref(SupportAxis.EXPRESSIVE, label, newPrompt))
+                },
+            )
+
             // Active-axis generated body. Takes the other half of the screen.
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 when (activeAxis) {
@@ -149,6 +170,9 @@ fun BidetTabsScreen(
                         axis = SupportAxis.EXPRESSIVE,
                         state = expressiveState,
                         onGenerate = { viewModel.generateExpressive() },
+                        // v22 (2026-05-13): inline prompt editor — Mark's "we get to put
+                        // the prompt in" affordance, matching the web Bidet.
+                        inlinePrompt = expressiveInlinePrompt,
                     )
                     // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
                     SupportAxis.JUDGES -> CleanTabContent(

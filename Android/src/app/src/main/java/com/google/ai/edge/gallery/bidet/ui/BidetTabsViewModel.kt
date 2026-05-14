@@ -268,6 +268,14 @@ class BidetTabsViewModel @Inject constructor(
                 .use { it.readText() }
         }
 
+    /**
+     * v22 (2026-05-13): public bridge to the bundled default for an axis. Used by the
+     * inline prompt editor on the EXPRESSIVE tab so its "Reset to default" button can
+     * fall back to the same asset the bottom-sheet editor reads. Side-effect free —
+     * just reads the asset off disk.
+     */
+    suspend fun defaultPromptFor(axis: SupportAxis): String = loadDefaultPromptAsset(axis)
+
     private suspend fun readPromptOverride(axis: SupportAxis): String? {
         val prefs = context.bidetDataStore.data.first()
         return prefs[promptOverrideKey(axis)]

@@ -159,6 +159,12 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
             BidetRoute.Main -> ReadyScreen(
                 onRequestDownload = { phase = Phase.NeedsDownload },
                 onOpenHistory = { route = BidetRoute.SessionsList },
+                // v22 (2026-05-13): "auto-flip to results page on Stop". Mark's quote:
+                // "the second I hit stop. It should flip to that. That page". When the
+                // user taps Stop, capture the just-recorded sessionId and navigate
+                // directly to the SessionDetail screen for that recording — no manual
+                // History → row tap required. onBack from there returns to the recorder.
+                onSessionFinalized = { id -> route = BidetRoute.SessionDetail(id) },
             )
             BidetRoute.SessionsList -> SessionsListScreen(
                 onBack = { route = BidetRoute.Main },
@@ -166,7 +172,7 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
             )
             is BidetRoute.SessionDetail -> SessionDetailScreen(
                 sessionId = r.sessionId,
-                onBack = { route = BidetRoute.SessionsList },
+                onBack = { route = BidetRoute.Main },
             )
         }
     }
@@ -229,6 +235,15 @@ internal object BidetMainScreenHiltEntryPoint {
 private fun ReadyScreen(
     onRequestDownload: () -> Unit,
     onOpenHistory: () -> Unit,
+    /**
+     * v22 (2026-05-13): invoked with the just-recorded sessionId the moment the user
+     * taps Stop. Drives the auto-flip-to-results-page behaviour. Captured BEFORE the
+     * stopIntent is sent because `_statusFlow` clears `sessionId` synchronously inside
+     * stopRecording's first half, so reading it after the fact gives null. The
+     * drainProgress.sessionId still carries the id post-stop but we already have it
+     * here at the Composable layer.
+     */
+    onSessionFinalized: (sessionId: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val viewModel: BidetTabsViewModel = hiltViewModel()
@@ -294,7 +309,14 @@ private fun ReadyScreen(
 
     val onToggleRecording: () -> Unit = {
         if (isRecording) {
+            // v22 (2026-05-13): capture sessionId BEFORE firing the stopIntent so we can
+            // navigate to the just-recorded SessionDetail page. Reading status.sessionId
+            // after the intent fires is racy — stopRecording() clears it synchronously.
+            val finishedSessionId = status.sessionId
             ContextCompat.startForegroundService(context, RecordingService.stopIntent(context))
+            if (!finishedSessionId.isNullOrEmpty()) {
+                onSessionFinalized(finishedSessionId)
+            }
         } else {
             val granted = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO

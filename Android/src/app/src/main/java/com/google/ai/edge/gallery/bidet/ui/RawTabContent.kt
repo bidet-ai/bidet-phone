@@ -20,6 +20,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,6 +67,7 @@ import com.google.ai.edge.gallery.R
  * `Column(verticalScroll(...))`. There was only ever one child and zero virtualization
  * benefit — the lazy-list machinery was a category error here.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RawTabContent(rawText: String, isRecording: Boolean) {
     val scrollState = rememberScrollState()
@@ -81,10 +84,21 @@ fun RawTabContent(rawText: String, isRecording: Boolean) {
                 .weight(1f)
                 .verticalScroll(scrollState),
         ) {
+            // v22 (2026-05-13): redundant long-press-to-copy affordance on the RAW
+            // body. The explicit Copy button below stays (v0.2 was Mark's preferred
+            // primary path because long-press on streaming autoscroll was unreliable);
+            // adding combinedClickable here is the safety net for the post-stop case
+            // when autoscroll has settled. Long-press → clipboard + Toast.
             Text(
                 text = rawText.ifEmpty {
                     if (isRecording) "Listening..." else "Tap the microphone to begin recording."
                 },
+                modifier = if (rawText.isNotEmpty()) {
+                    Modifier.combinedClickable(
+                        onClick = { /* tap is no-op — long-press copies, Copy button is primary */ },
+                        onLongClick = { copyRawToClipboard(context, rawText) },
+                    )
+                } else Modifier,
             )
         }
 

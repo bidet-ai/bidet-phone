@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -232,6 +233,26 @@ fun SessionDetailScreen(
                 editingEnabled = true,
             )
 
+            // v22 (2026-05-13): inline expressive-prompt editor state — same wiring as
+            // BidetTabsScreen so a user editing the prompt in history-view sees the
+            // same affordance they'd see during a live recording.
+            val expressiveDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.EXPRESSIVE)
+            }
+            val expressivePref = tabPrefs.firstOrNull { it.axis == SupportAxis.EXPRESSIVE }
+            val expressivePromptText = expressivePref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: expressiveDefault
+            val expressiveInlinePrompt = InlinePromptState(
+                currentPrompt = expressivePromptText,
+                defaultPrompt = expressiveDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = expressivePref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.EXPRESSIVE)
+                    viewModel.saveTabPref(TabPref(SupportAxis.EXPRESSIVE, label, newPrompt))
+                },
+            )
+
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
@@ -243,6 +264,8 @@ fun SessionDetailScreen(
                         axis = SupportAxis.EXPRESSIVE,
                         state = expressiveState,
                         onGenerate = { viewModel.generate(SupportAxis.EXPRESSIVE) },
+                        // v22 (2026-05-13): inline prompt editor on the EXPRESSIVE tab.
+                        inlinePrompt = expressiveInlinePrompt,
                     )
                     // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
                     SupportAxis.JUDGES -> CleanTabContent(
@@ -410,6 +433,15 @@ class SessionDetailViewModel @Inject constructor(
             refreshTabPrefs()
             stateFlowFor(axis).value = TabState.Idle
         }
+    }
+
+    /**
+     * v22 (2026-05-13): public bridge to the bundled default for an axis. Used by the
+     * inline prompt editor on the EXPRESSIVE tab so its "Reset to default" affordance
+     * reads the same asset the bottom-sheet editor uses.
+     */
+    suspend fun defaultPromptFor(axis: SupportAxis): String = withContext(Dispatchers.IO) {
+        context.assets.open(TabPref.defaultPromptAssetPath(axis)).bufferedReader().use { it.readText() }
     }
 
     fun selectAxis(axis: SupportAxis) {

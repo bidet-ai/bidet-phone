@@ -207,12 +207,14 @@ class TranscriptionWorker(
             val floatPcm = transcriptionEngine.int16ToFloat32(chunk.bytes)
             transcriptionEngine.transcribe(floatPcm, sampleRateHz = AudioCaptureSampleRate)
         }
-        // v18.6 (2026-05-10): sanitize per-chunk Moonshine output BEFORE persisting to
-        // the running RAW. Strips music notes, Thai/CJK trailers, repeat-token loops
-        // (cap 3), filler runs (uh/um cap 1), fake-number sequences, and the bathroom-
-        // ghost silence-fill. Mishears (Pixar→fix, Bidet→the day) are NOT touched — the
-        // cleaning model picks those up with context. See TranscriptSanitizer kdoc.
-        val text = com.google.ai.edge.gallery.bidet.cleaning.TranscriptSanitizer.clean(rawText)
+        // v22 (2026-05-13): use cleanForRaw() instead of clean(). Mark wants disfluencies
+        // (ums, ahs, stutters, "really really really") preserved in the RAW tab. The
+        // cleanForRaw pass only strips Moonshine hallucination signatures (music notes,
+        // CJK trailers, fake-number runs, bathroom-ghost, ≥10× repeat-token loops) and
+        // applies the proper-noun canonicalizer. Disfluency-collapse rules (FILLER_RUN,
+        // PHRASE_REPEAT_RUN, the 4× repeat cap) are skipped — Gemma's cleaning prompts
+        // already say "remove filler" so the Clean tabs still render fluently.
+        val text = com.google.ai.edge.gallery.bidet.cleaning.TranscriptSanitizer.cleanForRaw(rawText)
         Log.w(
             TAG,
             "handleAudio TRANSCRIBE_DONE idx=${chunk.idx} rawLen=${rawText.length} sanitizedLen=${text.length} " +

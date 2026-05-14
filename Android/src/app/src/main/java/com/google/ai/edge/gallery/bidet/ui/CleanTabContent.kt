@@ -20,6 +20,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,11 +31,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -42,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
@@ -66,6 +74,16 @@ fun CleanTabContent(
     axis: SupportAxis,
     state: TabState,
     onGenerate: () -> Unit,
+    /**
+     * v22 (2026-05-13): optional inline prompt editor block. Currently rendered only on
+     * the EXPRESSIVE (Clean for others) tab — Mark's quote: "clean for others where we
+     * get to put the prompt in that should be updated just like it is on the web bidet".
+     * The web Bidet has an editable prompt field above the output; this mirrors it.
+     *
+     * When non-null, [inlinePrompt] is drawn above [CleanTabBody]. The pencil/edit chip
+     * route via the bottom sheet still works — this is the discoverable in-tab affordance.
+     */
+    inlinePrompt: InlinePromptState? = null,
 ) {
     val idleHintRes = when (axis) {
         SupportAxis.RECEPTIVE -> R.string.bidet_clean_for_me_idle_hint
@@ -74,12 +92,101 @@ fun CleanTabContent(
         // so users don't bail mid-decode thinking the tab is stuck.
         SupportAxis.JUDGES -> R.string.bidet_clean_for_judges_idle_hint
     }
-    CleanTabBody(
-        state = state,
-        generateLabel = stringResource(R.string.bidet_generate_button),
-        idleHint = stringResource(idleHintRes),
-        onGenerate = onGenerate,
-    )
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (inlinePrompt != null) {
+            InlinePromptEditor(state = inlinePrompt)
+        }
+        CleanTabBody(
+            state = state,
+            generateLabel = stringResource(R.string.bidet_generate_button),
+            idleHint = stringResource(idleHintRes),
+            onGenerate = onGenerate,
+        )
+    }
+}
+
+/**
+ * v22 (2026-05-13): state container for the inline prompt editor on the EXPRESSIVE tab.
+ *
+ * @param currentPrompt the prompt text currently active for this axis (the bundled
+ *   default if the user hasn't edited it, otherwise their saved override).
+ * @param defaultPrompt the bundled default. Powers the "Reset to default" affordance —
+ *   tapping it overwrites the draft with this value without going through persistence.
+ * @param onSavePrompt invoked when the user taps Save. Persists via TabPrefRepository
+ *   the same way the bottom-sheet editor does, so changes here also affect future
+ *   recordings (consistent with existing tab-pref semantics).
+ */
+data class InlinePromptState(
+    val currentPrompt: String,
+    val defaultPrompt: String,
+    val onSavePrompt: (String) -> Unit,
+)
+
+@Composable
+private fun InlinePromptEditor(state: InlinePromptState) {
+    val context = LocalContext.current
+    // rememberSaveable keys on currentPrompt so a save-from-elsewhere updates the field;
+    // but the user's in-progress draft survives recomposition.
+    var draft by rememberSaveable(state.currentPrompt) { mutableStateOf(state.currentPrompt) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Prompt",
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Hide" else "Edit")
+            }
+        }
+        if (!expanded) {
+            // Collapsed: show a short preview so the user knows the prompt without
+            // bumping into the output area.
+            Text(
+                text = draft.take(120).let { if (draft.length > 120) "$it…" else it },
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                label = { Text("System prompt") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 4,
+                maxLines = 10,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        state.onSavePrompt(draft)
+                        expanded = false
+                        android.widget.Toast
+                            .makeText(context, "Prompt saved", android.widget.Toast.LENGTH_SHORT)
+                            .show()
+                    },
+                    enabled = draft.isNotBlank() && draft != state.currentPrompt,
+                ) { Text("Save") }
+                OutlinedButton(
+                    onClick = { draft = state.defaultPrompt },
+                    enabled = draft != state.defaultPrompt,
+                ) { Text("Reset to default") }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
