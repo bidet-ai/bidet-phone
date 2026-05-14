@@ -16,7 +16,7 @@
 
 package com.google.ai.edge.gallery.bidet.branding
 
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,23 +24,30 @@ import java.io.File
 
 /**
  * Pure-JVM unit test that pins the per-flavor launcher branding so a future hand can't
- * silently regress the launcher-truncation fix.
+ * silently regress Mark's unified-label spec.
  *
  * The labels live in `app/build.gradle.kts` as `resValue("string", "bidet_app_name_flavor", ...)`
  * declarations under each productFlavor. Reading the build script as text is the simplest way
  * to assert the contract without standing up an instrumented Android Context.
  *
- * v0.3 (2026-05-10): the "whisper" flavor was renamed to "moonshine" when the on-device
- * STT engine moved from Whisper-tiny + whisper.cpp to Moonshine-Tiny + sherpa-onnx. Tests
- * updated to match.
+ * History
+ * -------
+ *  - v0.3 (2026-05-10): the "whisper" flavor was renamed to "moonshine" when the on-device
+ *    STT engine moved from Whisper-tiny + whisper.cpp to Moonshine-Tiny + sherpa-onnx.
+ *  - v21 (2026-05-13): unified the per-flavor labels to a single "Bidet AI" string. The
+ *    engine-first labels ("Moonshine · Bidet" / "Gemma · Bidet") were a launcher-truncation
+ *    workaround that the shorter unified label no longer needs. The per-flavor adaptive-icon
+ *    artwork was also unified onto a single brain-over-water bitmap (sourced from
+ *    /mnt/c/Users/Breez/Downloads/BidetAi logo 1.png). Only the gemma flavor ships, but the
+ *    moonshine flavor matches so a debug sideload reads identically.
  *
- * Invariants asserted:
+ * Invariants asserted (v21):
  *   - both flavors declare bidet_app_name_flavor
- *   - the engine name comes BEFORE the brand name (so "Moonshine…" or "Gemma…" is what
- *     survives launcher truncation, not "Bidet…")
- *   - the two flavor labels are not equal
+ *   - both flavors use exactly the string "Bidet AI"
  *   - per-flavor adaptive icon resources exist for both square and round masks
- *   - per-flavor background drawables use the documented Material hex codes
+ *   - per-flavor background drawables use the documented soft-blue hex code that matches the
+ *     brain-icon's water-splash hue
+ *   - the foreground drawables redirect to the main mipmap brain bitmap
  */
 class FlavorBrandingTest {
 
@@ -61,50 +68,44 @@ class FlavorBrandingTest {
     }
 
     @Test
-    fun moonshineFlavor_declaresEngineFirstLabel() {
+    fun moonshineFlavor_declaresBidetAiLabel() {
         val match = MOONSHINE_RESVALUE_PATTERN.find(buildScript)
         assertNotNull("moonshine flavor must declare bidet_app_name_flavor resValue", match)
         val label = match!!.groupValues[1]
-        assertTrue(
-            "moonshine label must lead with 'Moonshine' so it survives launcher truncation, was: '$label'",
-            label.startsWith("Moonshine"),
-        )
-        assertTrue(
-            "moonshine label must still mention Bidet for brand recognition, was: '$label'",
-            label.contains("Bidet"),
+        assertEquals(
+            "moonshine label must be unified 'Bidet AI' (v21 Mark spec 2026-05-13)",
+            "Bidet AI",
+            label,
         )
     }
 
     @Test
-    fun gemmaFlavor_declaresEngineFirstLabel() {
+    fun gemmaFlavor_declaresBidetAiLabel() {
         val match = GEMMA_RESVALUE_PATTERN.find(buildScript)
         assertNotNull("gemma flavor must declare bidet_app_name_flavor resValue", match)
         val label = match!!.groupValues[1]
-        assertTrue(
-            "gemma label must lead with 'Gemma' so it survives launcher truncation, was: '$label'",
-            label.startsWith("Gemma"),
-        )
-        assertTrue(
-            "gemma label must still mention Bidet for brand recognition, was: '$label'",
-            label.contains("Bidet"),
+        assertEquals(
+            "gemma label must be unified 'Bidet AI' (v21 Mark spec 2026-05-13)",
+            "Bidet AI",
+            label,
         )
     }
 
     @Test
-    fun flavorLabels_areDistinct() {
+    fun flavorLabels_areUnified() {
         val moonshineLabel = MOONSHINE_RESVALUE_PATTERN.find(buildScript)?.groupValues?.get(1)
         val gemmaLabel = GEMMA_RESVALUE_PATTERN.find(buildScript)?.groupValues?.get(1)
         assertNotNull(moonshineLabel)
         assertNotNull(gemmaLabel)
-        assertNotEquals(
-            "moonshine and gemma flavors must show different launcher labels",
+        assertEquals(
+            "v21 (2026-05-13): both flavors must show the unified 'Bidet AI' launcher label",
             moonshineLabel,
             gemmaLabel,
         )
     }
 
     @Test
-    fun gemmaFlavor_hasAdaptiveIconWithMaterialGreenBackground() {
+    fun gemmaFlavor_hasAdaptiveIconWithSoftBlueBackground() {
         val resDir = File(moduleDir, "src/gemma/res")
         assertTrue("gemma flavor res dir must exist", resDir.isDirectory)
 
@@ -116,16 +117,20 @@ class FlavorBrandingTest {
         val backgroundDrawable = File(resDir, "drawable/ic_launcher_background_flavor.xml")
         assertTrue("gemma background drawable missing", backgroundDrawable.isFile)
         assertTrue(
-            "gemma background must use Material Green 700 (#388E3C)",
-            backgroundDrawable.readText().contains("#388E3C", ignoreCase = true),
+            "gemma background must use soft blue (#FFE6F0FA) matching the brain-icon water splash",
+            backgroundDrawable.readText().contains("#FFE6F0FA", ignoreCase = true),
         )
 
         val foreground = File(resDir, "drawable/ic_launcher_foreground_letter.xml")
-        assertTrue("gemma foreground letter drawable missing", foreground.isFile)
+        assertTrue("gemma foreground drawable missing", foreground.isFile)
+        assertTrue(
+            "gemma foreground must redirect to @mipmap/ic_launcher_foreground (brain bitmap)",
+            foreground.readText().contains("@mipmap/ic_launcher_foreground"),
+        )
     }
 
     @Test
-    fun moonshineFlavor_hasAdaptiveIconWithMaterialBlueBackground() {
+    fun moonshineFlavor_hasAdaptiveIconWithSoftBlueBackground() {
         val resDir = File(moduleDir, "src/moonshine/res")
         assertTrue("moonshine flavor res dir must exist", resDir.isDirectory)
 
@@ -137,12 +142,16 @@ class FlavorBrandingTest {
         val backgroundDrawable = File(resDir, "drawable/ic_launcher_background_flavor.xml")
         assertTrue("moonshine background drawable missing", backgroundDrawable.isFile)
         assertTrue(
-            "moonshine background must use Material Blue 700 (#1976D2)",
-            backgroundDrawable.readText().contains("#1976D2", ignoreCase = true),
+            "moonshine background must use soft blue (#FFE6F0FA) matching the brain-icon water splash",
+            backgroundDrawable.readText().contains("#FFE6F0FA", ignoreCase = true),
         )
 
         val foreground = File(resDir, "drawable/ic_launcher_foreground_letter.xml")
-        assertTrue("moonshine foreground letter drawable missing", foreground.isFile)
+        assertTrue("moonshine foreground drawable missing", foreground.isFile)
+        assertTrue(
+            "moonshine foreground must redirect to @mipmap/ic_launcher_foreground (brain bitmap)",
+            foreground.readText().contains("@mipmap/ic_launcher_foreground"),
+        )
     }
 
     @Test

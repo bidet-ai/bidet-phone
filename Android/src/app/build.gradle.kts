@@ -82,14 +82,21 @@ android {
       applicationIdSuffix = ".moonshine"
       versionNameSuffix = "-moonshine"
       // Engine-name first to survive launcher truncation (FlavorBrandingTest pins this).
-      resValue("string", "bidet_app_name_flavor", "Moonshine · Bidet")
+      // v21 (2026-05-13): Mark unified the launcher label across flavors — both flavors
+      // now show "Bidet AI" on the launcher. Only the gemma flavor ships, but moonshine
+      // matches per Mark's spec so a debug-build sideload reads identically. The previous
+      // engine-first labels ("Moonshine · Bidet" / "Gemma · Bidet") were a v0.3 fix for
+      // launcher truncation; the new shorter "Bidet AI" label fits without truncation on
+      // every Pixel density tested, so the engine-first guard is no longer needed.
+      resValue("string", "bidet_app_name_flavor", "Bidet AI")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "false")
     }
     create("gemma") {
       dimension = "engine"
       applicationIdSuffix = ".gemma"
       versionNameSuffix = "-gemma"
-      resValue("string", "bidet_app_name_flavor", "Gemma · Bidet")
+      // v21 (2026-05-13): unified launcher label — see moonshine flavor for full rationale.
+      resValue("string", "bidet_app_name_flavor", "Bidet AI")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "true")
     }
   }

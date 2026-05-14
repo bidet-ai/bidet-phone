@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-  <path
-      android:fillColor="#FFFFFFFF"
-      android:pathData="M54,30 C40.75,30 30,40.75 30,54 C30,67.25 40.75,78 54,78 C61.62,78 68.41,74.45 72.81,68.92 L72.81,56 L54,56 L54,64 L62.81,64 L62.81,65.66 C60.5,68.27 57.43,70 54,70 C45.16,70 38,62.84 38,54 C38,45.16 45.16,38 54,38 C58.42,38 62.42,39.79 65.31,42.69 L70.97,37.03 C66.62,32.69 60.62,30 54,30 Z" />
-</vector>
+<!--
+  v21 (2026-05-13): brain-over-water icon, sourced from /mnt/c/Users/Breez/Downloads/BidetAi logo 1.png
+  Replaces the per-flavor letter glyph ("G" for Gemma) with the unified Bidet AI launcher icon.
+  The file name keeps the historical `_letter` suffix because the flavor-specific adaptive-icon
+  XMLs ([gemma|moonshine]/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml) still reference it by
+  this name and FlavorBrandingTest pins the reference. The contents are now a bitmap redirect
+  to the main mipmap foreground PNG.
+-->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@mipmap/ic_launcher_foreground"
+    android:gravity="fill" />
