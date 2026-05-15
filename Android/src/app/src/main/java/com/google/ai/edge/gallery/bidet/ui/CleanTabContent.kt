@@ -30,6 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -96,7 +97,23 @@ fun CleanTabContent(
     }
     Column(modifier = Modifier.fillMaxSize()) {
         if (inlinePrompt != null) {
-            InlinePromptEditor(state = inlinePrompt)
+            // v25 (2026-05-14): when the inline prompt editor is shown (EXPRESSIVE +
+            // JUDGES axes), pass the live [TabState] and [onGenerate] callback so the
+            // editor can render an explicit, prominent "Generate" button DIRECTLY
+            // below the prompt block whenever the tab is in Idle / Failed state.
+            // Fix 3 — Mark via UI dump: previously the Idle-state Generate button
+            // lived only inside the CleanTabBody scroller below the editor; on a
+            // Pixel 8 Pro at the new RAW 2f / Clean 1f vertical split the editor
+            // pushed it off-screen. User saw "Prompt + Edit" and nothing else.
+            // Mark's preference: explicit user control on Others / Judges since
+            // those have the custom prompt — keep auto-trigger off, give the
+            // tappable button a permanent home next to the prompt the user just read.
+            InlinePromptEditor(
+                state = inlinePrompt,
+                tabState = state,
+                generateLabel = stringResource(R.string.bidet_generate_button),
+                onGenerate = onGenerate,
+            )
         }
         CleanTabBody(
             state = state,
@@ -125,7 +142,16 @@ data class InlinePromptState(
 )
 
 @Composable
-private fun InlinePromptEditor(state: InlinePromptState) {
+private fun InlinePromptEditor(
+    state: InlinePromptState,
+    // v25 Fix 3 (2026-05-14): live tab state + generate trigger so the editor block
+    // can render an explicit Generate button below the prompt body. These default to
+    // null/no-op for any future caller that only wants the prompt editor without the
+    // generate affordance, but the live recorder + history screens now pass them.
+    tabState: TabState? = null,
+    generateLabel: String = "Generate",
+    onGenerate: () -> Unit = {},
+) {
     val context = LocalContext.current
     // rememberSaveable keys on currentPrompt so a save-from-elsewhere updates the field;
     // but the user's in-progress draft survives recomposition.
@@ -205,6 +231,35 @@ private fun InlinePromptEditor(state: InlinePromptState) {
                     onClick = { draft = state.defaultPrompt },
                     enabled = draft != state.defaultPrompt,
                 ) { Text("Reset to default") }
+            }
+        }
+
+        // v25 Fix 3 (2026-05-14): explicit Generate / Regenerate affordance pinned
+        // directly under the prompt block. Mark's UI-dump report: on Others / Judges
+        // the editor was visible but the Idle-state Generate button buried inside the
+        // CleanTabBody scroller was either clipped at the new RAW 2f / Clean 1f
+        // vertical split, or invisible after the user expanded the editor. Pinning
+        // it here means user reads the prompt → taps Generate → inference fires. No
+        // auto-trigger (matches Mark's "explicit control" preference for the
+        // custom-prompt tabs). Button is hidden during in-flight inference to
+        // prevent double-tap restarts.
+        val isBusy = tabState is TabState.Streaming || tabState is TabState.Generating
+        if (tabState != null && !isBusy) {
+            val (label, tonal) = when (tabState) {
+                is TabState.Cached -> "Regenerate" to true
+                is TabState.Failed -> "Retry" to false
+                else -> generateLabel to false
+            }
+            if (tonal) {
+                FilledTonalButton(
+                    onClick = onGenerate,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(label) }
+            } else {
+                Button(
+                    onClick = onGenerate,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(label) }
             }
         }
     }

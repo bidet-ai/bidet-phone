@@ -146,6 +146,11 @@ fun BidetTabsScreen(
             // v22 (2026-05-13): inline expressive-prompt editor state. Read the default
             // off the asset bundle once so the Reset button has the canonical fallback.
             // The current prompt comes from tabPrefs (user override > default).
+            //
+            // v25 Fix 3 (2026-05-14): JUDGES gets the same inline editor + Generate
+            // button block. Mark's UI dump showed the Generate button was missing
+            // from Others/Judges; per his "explicit control on the custom-prompt
+            // tabs" preference, both now share the prompt + Generate affordance.
             val expressiveDefault by produceState(initialValue = "") {
                 value = viewModel.defaultPromptFor(SupportAxis.EXPRESSIVE)
             }
@@ -160,6 +165,23 @@ fun BidetTabsScreen(
                     val label = expressivePref?.label
                         ?: TabPref.defaultLabel(SupportAxis.EXPRESSIVE)
                     viewModel.saveTabPref(TabPref(SupportAxis.EXPRESSIVE, label, newPrompt))
+                },
+            )
+
+            val judgesDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.JUDGES)
+            }
+            val judgesPref = tabPrefs.firstOrNull { it.axis == SupportAxis.JUDGES }
+            val judgesPromptText = judgesPref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: judgesDefault
+            val judgesInlinePrompt = InlinePromptState(
+                currentPrompt = judgesPromptText,
+                defaultPrompt = judgesDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = judgesPref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.JUDGES)
+                    viewModel.saveTabPref(TabPref(SupportAxis.JUDGES, label, newPrompt))
                 },
             )
 
@@ -182,10 +204,13 @@ fun BidetTabsScreen(
                         inlinePrompt = expressiveInlinePrompt,
                     )
                     // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
+                    // v25 Fix 3 (2026-05-14): inline prompt editor + explicit
+                    // Generate button so the contest-pitch tab matches Others.
                     SupportAxis.JUDGES -> CleanTabContent(
                         axis = SupportAxis.JUDGES,
                         state = judgesState,
                         onGenerate = { viewModel.generateJudges() },
+                        inlinePrompt = judgesInlinePrompt,
                     )
                 }
             }

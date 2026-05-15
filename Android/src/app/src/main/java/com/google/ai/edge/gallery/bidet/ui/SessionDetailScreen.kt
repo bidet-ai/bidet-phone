@@ -241,6 +241,9 @@ fun SessionDetailScreen(
             // v22 (2026-05-13): inline expressive-prompt editor state — same wiring as
             // BidetTabsScreen so a user editing the prompt in history-view sees the
             // same affordance they'd see during a live recording.
+            //
+            // v25 Fix 3 (2026-05-14): JUDGES also gets the inline editor + Generate
+            // button block in history view, matching the live recorder.
             val expressiveDefault by produceState(initialValue = "") {
                 value = viewModel.defaultPromptFor(SupportAxis.EXPRESSIVE)
             }
@@ -255,6 +258,23 @@ fun SessionDetailScreen(
                     val label = expressivePref?.label
                         ?: TabPref.defaultLabel(SupportAxis.EXPRESSIVE)
                     viewModel.saveTabPref(TabPref(SupportAxis.EXPRESSIVE, label, newPrompt))
+                },
+            )
+
+            val judgesDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.JUDGES)
+            }
+            val judgesPref = tabPrefs.firstOrNull { it.axis == SupportAxis.JUDGES }
+            val judgesPromptText = judgesPref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: judgesDefault
+            val judgesInlinePrompt = InlinePromptState(
+                currentPrompt = judgesPromptText,
+                defaultPrompt = judgesDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = judgesPref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.JUDGES)
+                    viewModel.saveTabPref(TabPref(SupportAxis.JUDGES, label, newPrompt))
                 },
             )
 
@@ -275,10 +295,13 @@ fun SessionDetailScreen(
                         inlinePrompt = expressiveInlinePrompt,
                     )
                     // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
+                    // v25 Fix 3 (2026-05-14): inline prompt editor + explicit
+                    // Generate button so the contest-pitch tab matches Others.
                     SupportAxis.JUDGES -> CleanTabContent(
                         axis = SupportAxis.JUDGES,
                         state = judgesState,
                         onGenerate = { viewModel.generate(SupportAxis.JUDGES) },
+                        inlinePrompt = judgesInlinePrompt,
                     )
                 }
             }
