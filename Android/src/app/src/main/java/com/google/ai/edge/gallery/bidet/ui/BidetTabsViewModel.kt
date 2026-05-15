@@ -348,6 +348,10 @@ class BidetTabsViewModel @Inject constructor(
                     partialText = state.partialText,
                     tokenCount = state.tokenCount,
                     tokenCap = state.tokenCap,
+                    // v25 (2026-05-14): forward the sticky "Cleaning part N of M…"
+                    // banner from the service layer up to the UI layer so it can be
+                    // pinned above the scrolling partial text.
+                    chunkLabel = state.chunkLabel,
                 )
             }
             is CleanGenerationService.GenerationState.Done -> {

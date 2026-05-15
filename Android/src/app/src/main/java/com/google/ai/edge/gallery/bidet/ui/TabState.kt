@@ -39,11 +39,18 @@ sealed class TabState {
      * tokens; LiteRT-LM emits one Message per decoded token-block — close enough for the
      * user-facing progress bar). [tokenCap] is the hard ceiling so the UI can render a
      * percent estimate.
+     *
+     * v25 (2026-05-14): [chunkLabel] is the sticky "Cleaning part N of M…" banner for
+     * the chunked-clean long-dump path. Surfaced OUTSIDE [partialText] so the banner
+     * stays pinned above the scrolling output instead of being prefix-injected into the
+     * stream (which scrolled out of view as decode progressed). Null when not chunked
+     * (single-window generation) or after the banner has been cleared.
      */
     data class Streaming(
         val partialText: String,
         val tokenCount: Int,
         val tokenCap: Int,
+        val chunkLabel: String? = null,
     ) : TabState()
 
     /**

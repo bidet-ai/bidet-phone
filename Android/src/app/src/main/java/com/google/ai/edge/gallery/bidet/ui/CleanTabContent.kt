@@ -31,8 +31,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -276,6 +278,24 @@ private fun CleanTabBody(
                         state.tokenCap,
                     ),
                 )
+                // v25 (2026-05-14): sticky "Cleaning part N of M…" banner for the
+                // chunked long-dump path. Pinned ABOVE the scrolling partial Text so
+                // it stays visible the entire chunk decode — v24 prefix-injected the
+                // label into the stream and it scrolled off-screen as decode grew.
+                // Null when not chunked / single-window generation.
+                if (state.chunkLabel != null) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                    ) {
+                        Text(
+                            text = state.chunkLabel,
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
                 if (state.partialText.isNotEmpty()) {
                     Text(
                         text = AnnotatedString(state.partialText),

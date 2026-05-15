@@ -124,10 +124,12 @@ fun BidetTabsScreen(
             }
 
             // RAW reading base — always visible.
-            // v24 (2026-05-14): re-weighted to 1f RAW + 1.4f clean-tab to match the
-            // SessionDetail layout. v22's 1f/1f made each pane look cramped. Mark's
-            // feedback: "the boxes, the text boxes were really, really tiny."
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // v25 (2026-05-14): INVERTED the split — RAW now gets weight(2f) and the
+            // Clean tab body below drops to weight(1f). Mark's v24 test feedback: the
+            // Clean pane dominated the screen but RAW is his primary read surface;
+            // Clean is glance-able when needed. ~67% / ~33% of remaining vertical
+            // space goes to RAW / Clean respectively.
+            Box(modifier = Modifier.fillMaxWidth().weight(2f)) {
                 RawTabContent(rawText = raw, isRecording = isRecording)
             }
 
@@ -161,9 +163,10 @@ fun BidetTabsScreen(
                 },
             )
 
-            // Active-axis generated body. v24 (2026-05-14): weight(1.4f) so the
-            // clean tab area is the visual anchor of the screen post-Stop.
-            Box(modifier = Modifier.fillMaxWidth().weight(1.4f)) {
+            // Active-axis generated body. v25 (2026-05-14): dropped to weight(1f) so
+            // RAW dominates above (2f). Clean is glance-able, not the primary read
+            // surface — see RAW Box comment above for the rationale.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
                         axis = SupportAxis.RECEPTIVE,

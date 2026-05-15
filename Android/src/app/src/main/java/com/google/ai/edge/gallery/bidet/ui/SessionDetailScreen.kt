@@ -219,14 +219,12 @@ fun SessionDetailScreen(
             }
 
             // RAW reading base — always visible.
-            // v24 (2026-05-14): re-weighted the RAW base + the clean tab body. v22's
-            // 1f/1f split made each pane half-screen, which (combined with the small
-            // default Text typography) is what Mark flagged: "the boxes, the text
-            // boxes were really, really tiny for reading." Bumped to 1f RAW + 1.4f
-            // clean-tab so the active generation/cleaned-output area is the visual
-            // anchor of the screen and the RAW base is still a comfortable reading
-            // height for a 3-min brain dump.
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // v25 (2026-05-14): INVERTED the split — RAW now gets weight(2f) and the
+            // Clean tab body below drops to weight(1f). Mark's v24 test feedback: the
+            // Clean pane dominated the screen but RAW is his primary read surface in
+            // history view too; Clean is glance-able when needed. ~67% / ~33% of
+            // remaining vertical space goes to RAW / Clean respectively.
+            Box(modifier = Modifier.fillMaxWidth().weight(2f)) {
                 RawTabContent(rawText = session.rawText, isRecording = false)
             }
 
@@ -260,7 +258,9 @@ fun SessionDetailScreen(
                 },
             )
 
-            Box(modifier = Modifier.fillMaxWidth().weight(1.4f)) {
+            // v25 (2026-05-14): dropped Clean tab body weight to 1f to invert the
+            // RAW/Clean split — see RAW Box comment above.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
                         axis = SupportAxis.RECEPTIVE,
@@ -577,6 +577,8 @@ class SessionDetailViewModel @Inject constructor(
                     partialText = state.partialText,
                     tokenCount = state.tokenCount,
                     tokenCap = state.tokenCap,
+                    // v25 (2026-05-14): forward chunkLabel for the sticky banner.
+                    chunkLabel = state.chunkLabel,
                 )
             }
             is CleanGenerationService.GenerationState.Done -> {

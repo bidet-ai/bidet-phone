@@ -91,12 +91,18 @@ class CleanGenerationService : Service() {
      */
     sealed class GenerationState {
         object Idle : GenerationState()
+        // v25 (2026-05-14): [chunkLabel] is the sticky "Cleaning part N of M…" banner
+        // for the chunked-clean long-dump path. Surfaced as its own field rather than
+        // prefix-injected into [partialText] so the UI can pin it above the scrolling
+        // output (v24 prefix scrolled off-screen as decode progressed). Null when not
+        // chunked.
         data class Streaming(
             val sessionId: String,
             val axis: SupportAxis,
             val partialText: String,
             val tokenCount: Int,
             val tokenCap: Int,
+            val chunkLabel: String? = null,
         ) : GenerationState()
         data class Done(
             val sessionId: String,
@@ -224,7 +230,12 @@ class CleanGenerationService : Service() {
                             append("your output with meta-commentary about parts.)")
                         }
                         val previouslyComposed = if (parts.isEmpty()) "" else parts.joinToString("\n\n") + "\n\n"
-                        val header = "Cleaning part ${index + 1} of ${windows.size}…\n\n"
+                        // v25 (2026-05-14): chunkLabel is now a sticky banner surfaced as
+                        // its own field on the Streaming state — UI pins it above the
+                        // scrolling output so it stays visible the entire chunk. v24
+                        // prefix-injected this into partialText and it scrolled off-screen
+                        // as decode progressed (per Mark's v24 contest-night test).
+                        val chunkLabel = "Cleaning part ${index + 1} of ${windows.size}…"
                         val partText = gemma.runInferenceStreaming(
                             systemPrompt = partSystemPrompt,
                             userPrompt = window,
@@ -235,9 +246,10 @@ class CleanGenerationService : Service() {
                                 _stateFlow.value = GenerationState.Streaming(
                                     sessionId = sessionId,
                                     axis = axis,
-                                    partialText = header + previouslyComposed + cumulative,
+                                    partialText = previouslyComposed + cumulative,
                                     tokenCount = streamCounter,
                                     tokenCap = totalCap,
+                                    chunkLabel = chunkLabel,
                                 )
                             },
                         )
