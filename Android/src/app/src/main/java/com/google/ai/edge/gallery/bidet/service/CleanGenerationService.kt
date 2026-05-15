@@ -91,12 +91,18 @@ class CleanGenerationService : Service() {
      */
     sealed class GenerationState {
         object Idle : GenerationState()
+        // v25 (2026-05-14): [chunkLabel] is the sticky "Cleaning part N of M…" banner
+        // for the chunked-clean long-dump path. Surfaced as its own field rather than
+        // prefix-injected into [partialText] so the UI can pin it above the scrolling
+        // output (v24 prefix scrolled off-screen as decode progressed). Null when not
+        // chunked.
         data class Streaming(
             val sessionId: String,
             val axis: SupportAxis,
             val partialText: String,
             val tokenCount: Int,
             val tokenCap: Int,
+            val chunkLabel: String? = null,
         ) : GenerationState()
         data class Done(
             val sessionId: String,
@@ -172,12 +178,23 @@ class CleanGenerationService : Service() {
         // suspendCancellableCoroutine → Conversation.cancelProcess.
         generationJob = scope.launch(Dispatchers.Default) {
             try {
-                // Gemma 4 E2B has a hard 2048-token context cap. With tokenCap reserved for
-                // output and the system prompt budget, the per-call input ceiling is ~700
-                // tokens (≈2400 chars of English). Split longer RAW dumps into windows,
-                // clean each on-device, and stitch. Short dumps still take the single-call
-                // path so behaviour for sub-7-minute sessions is byte-identical.
-                val windows = RawChunker.chunk(userPrompt)
+                // Gemma 4 E2B has a hard 2048-token context cap. With tokenCap reserved
+                // for output and the system prompt budget, the per-call input ceiling is
+                // ~700 tokens (≈2400 chars of English) — but only when the system prompt
+                // is short. Today's prompts are:
+                //   - RECEPTIVE: glossary (~1411 c) + receptive_default (~683 c) ≈ ~830 tok
+                //   - EXPRESSIVE: glossary + expressive_default (~790 c) ≈ ~880 tok
+                //   - JUDGES: glossary + judges_default (~1685 c) ≈ ~1240 tok
+                // Pass the actual systemPrompt to [RawChunker.chunkForPrompt] so the per-
+                // window budget tracks the axis — JUDGES gets smaller windows than
+                // RECEPTIVE, eliminating the "input token IDs too long ... 2634 ≥ 1024"
+                // overflow that long brain dumps hit on the JUDGES axis. See RawChunker
+                // kdoc for the sizing math.
+                val windows = RawChunker.chunkForPrompt(
+                    raw = userPrompt,
+                    systemPrompt = systemPrompt,
+                    perChunkOutputCap = CHUNKED_PER_WINDOW_OUTPUT_TOKEN_CAP,
+                )
                 val finalText = if (windows.size <= 1) {
                     gemma.runInferenceStreaming(
                         systemPrompt = systemPrompt,
@@ -213,7 +230,12 @@ class CleanGenerationService : Service() {
                             append("your output with meta-commentary about parts.)")
                         }
                         val previouslyComposed = if (parts.isEmpty()) "" else parts.joinToString("\n\n") + "\n\n"
-                        val header = "Cleaning part ${index + 1} of ${windows.size}…\n\n"
+                        // v25 (2026-05-14): chunkLabel is now a sticky banner surfaced as
+                        // its own field on the Streaming state — UI pins it above the
+                        // scrolling output so it stays visible the entire chunk. v24
+                        // prefix-injected this into partialText and it scrolled off-screen
+                        // as decode progressed (per Mark's v24 contest-night test).
+                        val chunkLabel = "Cleaning part ${index + 1} of ${windows.size}…"
                         val partText = gemma.runInferenceStreaming(
                             systemPrompt = partSystemPrompt,
                             userPrompt = window,
@@ -224,9 +246,10 @@ class CleanGenerationService : Service() {
                                 _stateFlow.value = GenerationState.Streaming(
                                     sessionId = sessionId,
                                     axis = axis,
-                                    partialText = header + previouslyComposed + cumulative,
+                                    partialText = previouslyComposed + cumulative,
                                     tokenCount = streamCounter,
                                     tokenCap = totalCap,
+                                    chunkLabel = chunkLabel,
                                 )
                             },
                         )

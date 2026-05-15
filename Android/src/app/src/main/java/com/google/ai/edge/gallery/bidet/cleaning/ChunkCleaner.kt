@@ -92,15 +92,33 @@ class ChunkCleaner(
                         return@runCatching
                     }
                     val startMs = System.currentTimeMillis()
-                    val result = gemma.runInference(
+                    // Belt-and-suspenders: a stuck STT buffer or a late-cut Moonshine
+                    // window can emit a very long chunk text (saw 4-5k chars on a Pixel 8
+                    // VAD glitch 2026-05-09). Route through the same RawChunker the on-
+                    // tap path uses so we never feed the engine more than one safe window
+                    // at a time. For the common case (300-600 chars per ~30s audio) this
+                    // is a no-op fast path: chunkForPrompt returns a single-element list
+                    // and we make one inference call.
+                    val subWindows = RawChunker.chunkForPrompt(
+                        raw = task.chunkText,
                         systemPrompt = cleanForMePrompt,
-                        userPrompt = task.chunkText,
-                        maxOutputTokens = maxOutputTokens,
-                        temperature = temperature,
+                        perChunkOutputCap = maxOutputTokens,
                     )
+                    val resultBuilder = StringBuilder()
+                    for ((i, sub) in subWindows.withIndex()) {
+                        val partial = gemma.runInference(
+                            systemPrompt = cleanForMePrompt,
+                            userPrompt = sub,
+                            maxOutputTokens = maxOutputTokens,
+                            temperature = temperature,
+                        )
+                        if (i > 0) resultBuilder.append("\n\n")
+                        resultBuilder.append(partial.trim())
+                    }
+                    val result = resultBuilder.toString()
                     val durMs = System.currentTimeMillis() - startMs
                     outFile.writeText(result.trim())
-                    Log.i(TAG, "cleaned idx=${task.idx} inChars=${task.chunkText.length} outChars=${result.length} dur=${durMs}ms")
+                    Log.i(TAG, "cleaned idx=${task.idx} inChars=${task.chunkText.length} subWindows=${subWindows.size} outChars=${result.length} dur=${durMs}ms")
                 }.onFailure { t ->
                     Log.w(TAG, "clean idx=${task.idx} failed: ${t.message}", t)
                     // Don't write a partial result — the on-tap fallback will fill the gap.

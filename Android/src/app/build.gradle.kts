@@ -82,14 +82,21 @@ android {
       applicationIdSuffix = ".moonshine"
       versionNameSuffix = "-moonshine"
       // Engine-name first to survive launcher truncation (FlavorBrandingTest pins this).
-      resValue("string", "bidet_app_name_flavor", "Moonshine · Bidet")
+      // v21 (2026-05-13): Mark unified the launcher label across flavors — both flavors
+      // now show "Bidet AI" on the launcher. Only the gemma flavor ships, but moonshine
+      // matches per Mark's spec so a debug-build sideload reads identically. The previous
+      // engine-first labels ("Moonshine · Bidet" / "Gemma · Bidet") were a v0.3 fix for
+      // launcher truncation; the new shorter "Bidet AI" label fits without truncation on
+      // every Pixel density tested, so the engine-first guard is no longer needed.
+      resValue("string", "bidet_app_name_flavor", "Bidet AI")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "false")
     }
     create("gemma") {
       dimension = "engine"
       applicationIdSuffix = ".gemma"
       versionNameSuffix = "-gemma"
-      resValue("string", "bidet_app_name_flavor", "Gemma · Bidet")
+      // v21 (2026-05-13): unified launcher label — see moonshine flavor for full rationale.
+      resValue("string", "bidet_app_name_flavor", "Bidet AI")
       buildConfigField("boolean", "USE_GEMMA_AUDIO", "true")
     }
   }
@@ -161,6 +168,11 @@ android {
   // "this is a JVM unit test and we don't care about Android-specific behaviour".
   testOptions {
     unitTests.isReturnDefaultValues = true
+    // v26 (2026-05-14): Robolectric + Compose UI tests need merged Android
+    // resources on the unit-test classpath so stringResource() (e.g.
+    // R.string.bidet_generate_button) resolves under `./gradlew :app:test`.
+    // This is purely for the Clean-tab visibility guard — no runtime impact.
+    unitTests.isIncludeAndroidResources = true
   }
 }
 
@@ -241,6 +253,15 @@ dependencies {
   // throws "Method not mocked" RuntimeException in JVM unit-test runtime;
   // DedupAlgorithmTest fixtures parse JSON, so we need the real artifact.
   testImplementation("org.json:json:20240303")
+  // v26 (2026-05-14): Robolectric + Compose ui-test-junit4 on the UNIT-test
+  // classpath so the Clean-tab Generate-button visibility guard runs with
+  // `./gradlew :app:test` (no device). v22→v25 shipped UI without this gate;
+  // the whole point of v26 is that the regression is now caught here first.
+  testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.junit)
+  testImplementation(platform(libs.androidx.compose.bom))
+  testImplementation(libs.androidx.ui.test.junit4)
+  testImplementation(libs.androidx.ui.test.manifest)
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.espresso.core)
   androidTestImplementation(platform(libs.androidx.compose.bom))

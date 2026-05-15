@@ -23,10 +23,10 @@ import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.ui.theme.ThemeSettings
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+// v24 (2026-05-14): the prewarm coroutine + Dispatchers.IO scope were dropped along with
+// the eager Gemma engine load. Imports kept minimal; the Hilt-injected
+// sharedEngineProvider field is retained for graph-cohesion reasons (it's still in scope
+// if a future v25 wants to add an opt-in advanced "warm Gemma in background" toggle).
 
 @HiltAndroidApp
 class GalleryApplication : Application() {
@@ -39,14 +39,7 @@ class GalleryApplication : Application() {
    * injects it on both flavors — that's harmless since the singleton is just an idle handle
    * until something acquires the engine.
    */
-  @Inject lateinit var sharedEngineProvider: BidetSharedLiteRtEngineProvider
-
-  /**
-   * Process-wide scope for app-launch warm-up tasks that must outlive any single Activity.
-   * SupervisorJob so a crash in the prewarm coroutine doesn't poison future launches; IO
-   * dispatcher because the LiteRT-LM Engine ctor does big disk + native work.
-   */
-  private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  @Suppress("unused") @Inject lateinit var sharedEngineProvider: BidetSharedLiteRtEngineProvider
 
   override fun onCreate() {
     super.onCreate()
@@ -56,19 +49,33 @@ class GalleryApplication : Application() {
 
     // bidet-ai: FirebaseApp.initializeApp() removed (zero-telemetry hard rule).
 
-    // 2026-05-09: pre-warm the LiteRT-LM Gemma 4 E4B engine on app launch (gemma flavor
-    // only). The 3.6 GB model load takes 10-30s of native work on the Pixel 8 Pro; doing
-    // it lazily on the first Record tap blew past Android's 5-second
-    // startForegroundService→startForeground deadline (logcat showed
-    // startForegroundDelayMs:68453 from AOSP ActiveServices.java). Now: kick off the load
-    // here on a background coroutine, gate the welcome-screen Record button on
-    // sharedEngineProvider.state, and by the time the user finds the Record button the
-    // engine is warm. ensureReady() is idempotent + state-flow driven so the UI just
-    // observes; no runBlocking here.
-    if (BidetSharedLiteRtEngineProvider.shouldPrewarmOnAppLaunch()) {
-      applicationScope.launch {
-        sharedEngineProvider.ensureReady()
-      }
-    }
+    // v24 (2026-05-14): STT-first runtime ordering. The previous design prewarmed the
+    // Gemma 4 E2B LiteRT-LM engine on app launch (gemma flavor only) so the Record button
+    // could fire instantly. Mark's v23 test showed the symptom: a 3-min brain dump → only
+    // the first chunk transcribed, the rest "[transcription failed]". Root cause: BOTH
+    // the LiteRT-LM Gemma audio engine (~2.4 GB resident on E2B) and the per-chunk
+    // ChunkCleaner (which acquires the same engine) competed for memory + serial access
+    // to the shared engine during recording. Real-time STT lost the race; the user got
+    // empty raw text after chunk 0.
+    //
+    // Fix: pivot the gemma flavor to use Moonshine STT for live transcription (the same
+    // small sherpa-onnx ONNX engine the moonshine flavor uses; assets are already packaged
+    // in both flavor APKs). Gemma is now ONLY the cleaning/analysis/judges LLM, loaded
+    // LAZILY on first generate-tap after Stop. Mark's verbatim approval (2026-05-14):
+    // "I would love if right at the end you can see that the moonshine had done his thing
+    //  as quickly as possible. And then ... the Gemma, the one that's taken a few minutes
+    //  to get its work done. That's OK. I'm good with that if that's the trade-off."
+    //
+    // Net effect:
+    //  - App launch: no Gemma load. Fast cold start.
+    //  - Record tap: Moonshine inits in <1 sec, transcription runs live as chunks arrive.
+    //  - Stop tap: auto-flip to SessionDetail. RAW is already complete. User taps a clean
+    //    tab → Gemma loads (10-30 s on Pixel 8 Pro / Tensor G3 CPU) → cleaning streams.
+    //  - The TranscriptionEngine.create() factory now returns MoonshineEngine on both
+    //    flavors; the gemma flavor's distinguishing feature is the cleaning LLM, not the
+    //    STT.
+    //
+    // sharedEngineProvider is still injected (used by LiteRtBidetGemmaClient for the
+    // cleaning path); the prewarm is just removed.
   }
 }

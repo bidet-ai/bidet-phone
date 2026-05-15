@@ -159,6 +159,12 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
             BidetRoute.Main -> ReadyScreen(
                 onRequestDownload = { phase = Phase.NeedsDownload },
                 onOpenHistory = { route = BidetRoute.SessionsList },
+                // v22 (2026-05-13): "auto-flip to results page on Stop". Mark's quote:
+                // "the second I hit stop. It should flip to that. That page". When the
+                // user taps Stop, capture the just-recorded sessionId and navigate
+                // directly to the SessionDetail screen for that recording — no manual
+                // History → row tap required. onBack from there returns to the recorder.
+                onSessionFinalized = { id -> route = BidetRoute.SessionDetail(id) },
             )
             BidetRoute.SessionsList -> SessionsListScreen(
                 onBack = { route = BidetRoute.Main },
@@ -166,7 +172,7 @@ fun BidetMainScreen(modelProvider: BidetModelProvider) {
             )
             is BidetRoute.SessionDetail -> SessionDetailScreen(
                 sessionId = r.sessionId,
-                onBack = { route = BidetRoute.SessionsList },
+                onBack = { route = BidetRoute.Main },
             )
         }
     }
@@ -229,6 +235,15 @@ internal object BidetMainScreenHiltEntryPoint {
 private fun ReadyScreen(
     onRequestDownload: () -> Unit,
     onOpenHistory: () -> Unit,
+    /**
+     * v22 (2026-05-13): invoked with the just-recorded sessionId the moment the user
+     * taps Stop. Drives the auto-flip-to-results-page behaviour. Captured BEFORE the
+     * stopIntent is sent because `_statusFlow` clears `sessionId` synchronously inside
+     * stopRecording's first half, so reading it after the fact gives null. The
+     * drainProgress.sessionId still carries the id post-stop but we already have it
+     * here at the Composable layer.
+     */
+    onSessionFinalized: (sessionId: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val viewModel: BidetTabsViewModel = hiltViewModel()
@@ -294,7 +309,14 @@ private fun ReadyScreen(
 
     val onToggleRecording: () -> Unit = {
         if (isRecording) {
+            // v22 (2026-05-13): capture sessionId BEFORE firing the stopIntent so we can
+            // navigate to the just-recorded SessionDetail page. Reading status.sessionId
+            // after the intent fires is racy — stopRecording() clears it synchronously.
+            val finishedSessionId = status.sessionId
             ContextCompat.startForegroundService(context, RecordingService.stopIntent(context))
+            if (!finishedSessionId.isNullOrEmpty()) {
+                onSessionFinalized(finishedSessionId)
+            }
         } else {
             val granted = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
@@ -376,47 +398,36 @@ private fun ReadyScreen(
 }
 
 /**
- * 2026-05-09: welcome-screen Record button with the engine pre-warm gate.
+ * v24 (2026-05-14): welcome-screen Record button.
  *
- *  - [EngineState.Ready] (or [EngineState.Idle] on moonshine builds, since moonshine never
- *    warms the LiteRT-LM engine) → enabled "Record" button. Fires [onRecord] on tap.
- *  - [EngineState.Loading] / Idle on a gemma build that's still warming up → disabled
- *    button labelled "Loading local AI…" with a small inline [CircularProgressIndicator].
- *    The user can still read everything else on the screen — only this control is gated.
- *  - [EngineState.Failed] → disabled button labelled "Tap to retry — local AI failed to
- *    load" with a retry callback that re-runs [BidetSharedLiteRtEngineProvider.ensureReady].
+ * Previously this Composable gated the Record button on Gemma engine prewarm state because
+ * the gemma flavor used Gemma's audio mode for live STT (2.4 GB engine load, 10-30 sec
+ * cold start on Pixel 8 Pro). After the STT-first pivot the STT engine is Moonshine on
+ * both flavors — a small sherpa-onnx ONNX recognizer that inits in well under a second.
+ * No gate needed; the button is just a button.
  *
- * Note Idle on the moonshine build is treated as Ready because the moonshine flavor doesn't
- * route through LiteRT-LM at all — the Application class skips ensureReady() there per
- * [BidetSharedLiteRtEngineProvider.shouldPrewarmOnAppLaunch]. We can detect that with the
- * BuildConfig flag at the call site, but routing the decision through the state flow keeps
- * the welcome screen one expression instead of a per-flavor branch.
+ * The [engineState] parameter is retained on the public signature so existing callers
+ * compile unchanged, but it's no longer read. The [onRetry] parameter likewise — if a
+ * future v25 reinstates an opt-in Gemma-STT toggle, the gate can be re-wired without a
+ * signature break.
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun EngineGatedRecordButton(
     engineState: EngineState,
     onRecord: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    val isMoonshineFlavor = !com.google.ai.edge.gallery.BuildConfig.USE_GEMMA_AUDIO
-    when (engineState) {
-        EngineState.Ready -> Button(onClick = onRecord) { Text("Record") }
-        EngineState.Idle -> {
-            if (isMoonshineFlavor) {
-                // Moonshine flavor never warms the LiteRT-LM engine — the button works as
-                // before. The state flow stays Idle for the lifetime of the process.
-                Button(onClick = onRecord) { Text("Record") }
-            } else {
-                LoadingRecordButton()
-            }
-        }
-        is EngineState.Loading -> LoadingRecordButton()
-        is EngineState.Failed -> {
-            Button(onClick = onRetry) { Text("Tap to retry — local AI failed to load") }
-        }
-    }
+    Button(onClick = onRecord) { Text("Record") }
 }
 
+/**
+ * v24 (2026-05-14): retained for potential re-use by the SessionDetail "Cleaning up your
+ * mess…" spinner state. Currently unused by the welcome screen (Moonshine STT init is
+ * sub-second, no gate). Marked private + Suppressed so it survives the unused-symbol lint
+ * without leaking out of the file.
+ */
+@Suppress("unused")
 @Composable
 private fun LoadingRecordButton() {
     Button(

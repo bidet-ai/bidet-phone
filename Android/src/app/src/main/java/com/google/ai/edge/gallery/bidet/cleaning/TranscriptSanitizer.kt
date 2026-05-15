@@ -38,6 +38,66 @@ package com.google.ai.edge.gallery.bidet.cleaning
  */
 object TranscriptSanitizer {
 
+    /**
+     * v22 (2026-05-13): "Raw should be raw" sanitizer pass.
+     *
+     * Mark's quote: "the raw needs to be that raw" — he wants disfluencies (ums, ahs,
+     * stutters, repeated words) preserved in the RAW tab. The full [clean] method below
+     * collapses fillers and caps short repeats; that's right for the cleaning prompts
+     * (Gemma sees less noise) but WRONG for the verbatim transcript the user reads on
+     * the Raw tab.
+     *
+     * This pass strips ONLY the Moonshine hallucination signatures — patterns no real
+     * speaker would produce — and leaves natural disfluencies untouched:
+     *
+     *  - Music notes (`♪♪♪♪`)               → stripped (silence-fill, not speech)
+     *  - Non-Latin trailers (Thai / CJK)    → stripped (silence-fill, not speech)
+     *  - Fake-number runs (≥4 short ints)   → stripped (encoder garbage)
+     *  - Bathroom-ghost repeats             → stripped (YouTube-trained ghost)
+     *  - Extreme repeats (>10× same word)   → capped at 10 (Moonshine loop, not emphasis)
+     *  - Multi-word phrase repeats (≥3×)    → kept (a speaker MIGHT actually repeat
+     *                                          themselves; we'd rather see the truth)
+     *  - Filler runs (uh/um/ah/er)          → KEPT (this is the whole point of v22)
+     *  - Short repeat runs (3-10×)          → KEPT ("really really really" is emphasis)
+     *  - RegexCanonicalizer proper-noun fix → applied (mishear correction is not a
+     *                                          disfluency; "the day AI"→"Bidet AI"
+     *                                          should still happen)
+     */
+    fun cleanForRaw(text: String): String {
+        if (text.isBlank()) return ""
+        var out = text
+
+        // 1) Drop music-note runs entirely.
+        out = MUSIC_NOTE.replace(out, "")
+
+        // 2) Drop non-Latin scripts (Thai / CJK / Cyrillic / Arabic etc).
+        out = NON_LATIN.replace(out, "")
+
+        // 3) Drop trailing fake-number sequences.
+        out = FAKE_NUMBER_RUN.replace(out, "")
+
+        // 4) Drop the bathroom-ghost silence-fill (≥2 consecutive instances).
+        out = BATHROOM_GHOST.replace(out, "")
+
+        // 5) Cap extreme repeats only — >10× the same word. Real emphasis tops out
+        //    around 4-5; anything beyond 10 is the Moonshine encoder looping.
+        //    Keep up to 10 instances so the disfluency is visible.
+        out = EXTREME_REPEAT_TOKEN_RUN.replace(out) { match ->
+            val word = match.groupValues[1]
+            // 10 repetitions of "word "
+            (word + " ").repeat(10).trimEnd()
+        }
+
+        // 6) Collapse multi-space / multi-comma cleanup.
+        out = MULTI_SPACE.replace(out, " ")
+        out = MULTI_COMMA.replace(out, ",")
+
+        // 7) Proper-noun canonicalization — mishear correction is not a disfluency.
+        out = RegexCanonicalizer.apply(out)
+
+        return out.trim()
+    }
+
     /** Sanitize a per-chunk Moonshine output. Idempotent: calling twice == calling once. */
     fun clean(text: String): String {
         if (text.isBlank()) return ""
@@ -142,6 +202,17 @@ object TranscriptSanitizer {
      */
     private val REPEAT_TOKEN_RUN = Regex(
         "\\b([A-Za-z']{1,20})\\b([\\s,]+\\1\\b){3,}",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * v22 (2026-05-13): EXTREME repeat-token run — ≥10 consecutive identical tokens.
+     * Used by [cleanForRaw] to cap obvious Moonshine encoder loops without touching
+     * natural emphasis ("really really really"). Group 1 captures the word so we can
+     * reconstruct a 10-instance run.
+     */
+    private val EXTREME_REPEAT_TOKEN_RUN = Regex(
+        "\\b([A-Za-z']{1,20})\\b([\\s,]+\\1\\b){10,}",
         RegexOption.IGNORE_CASE,
     )
 

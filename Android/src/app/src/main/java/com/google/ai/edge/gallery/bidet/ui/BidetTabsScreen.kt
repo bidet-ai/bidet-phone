@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -122,8 +123,13 @@ fun BidetTabsScreen(
                 )
             }
 
-            // RAW reading base — always visible. Takes ~half the screen via weight.
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // RAW reading base — always visible.
+            // v25 (2026-05-14): INVERTED the split — RAW now gets weight(2f) and the
+            // Clean tab body below drops to weight(1f). Mark's v24 test feedback: the
+            // Clean pane dominated the screen but RAW is his primary read surface;
+            // Clean is glance-able when needed. ~67% / ~33% of remaining vertical
+            // space goes to RAW / Clean respectively.
+            Box(modifier = Modifier.fillMaxWidth().weight(2f)) {
                 RawTabContent(rawText = raw, isRecording = isRecording)
             }
 
@@ -137,7 +143,51 @@ fun BidetTabsScreen(
                 editingEnabled = true,
             )
 
-            // Active-axis generated body. Takes the other half of the screen.
+            // v22 (2026-05-13): inline expressive-prompt editor state. Read the default
+            // off the asset bundle once so the Reset button has the canonical fallback.
+            // The current prompt comes from tabPrefs (user override > default).
+            //
+            // v25 Fix 3 (2026-05-14): JUDGES gets the same inline editor + Generate
+            // button block. Mark's UI dump showed the Generate button was missing
+            // from Others/Judges; per his "explicit control on the custom-prompt
+            // tabs" preference, both now share the prompt + Generate affordance.
+            val expressiveDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.EXPRESSIVE)
+            }
+            val expressivePref = tabPrefs.firstOrNull { it.axis == SupportAxis.EXPRESSIVE }
+            val expressivePromptText = expressivePref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: expressiveDefault
+            val expressiveInlinePrompt = InlinePromptState(
+                currentPrompt = expressivePromptText,
+                defaultPrompt = expressiveDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = expressivePref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.EXPRESSIVE)
+                    viewModel.saveTabPref(TabPref(SupportAxis.EXPRESSIVE, label, newPrompt))
+                },
+            )
+
+            val judgesDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.JUDGES)
+            }
+            val judgesPref = tabPrefs.firstOrNull { it.axis == SupportAxis.JUDGES }
+            val judgesPromptText = judgesPref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: judgesDefault
+            val judgesInlinePrompt = InlinePromptState(
+                currentPrompt = judgesPromptText,
+                defaultPrompt = judgesDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = judgesPref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.JUDGES)
+                    viewModel.saveTabPref(TabPref(SupportAxis.JUDGES, label, newPrompt))
+                },
+            )
+
+            // Active-axis generated body. v25 (2026-05-14): dropped to weight(1f) so
+            // RAW dominates above (2f). Clean is glance-able, not the primary read
+            // surface — see RAW Box comment above for the rationale.
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
@@ -149,12 +199,18 @@ fun BidetTabsScreen(
                         axis = SupportAxis.EXPRESSIVE,
                         state = expressiveState,
                         onGenerate = { viewModel.generateExpressive() },
+                        // v22 (2026-05-13): inline prompt editor — Mark's "we get to put
+                        // the prompt in" affordance, matching the web Bidet.
+                        inlinePrompt = expressiveInlinePrompt,
                     )
                     // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
+                    // v25 Fix 3 (2026-05-14): inline prompt editor + explicit
+                    // Generate button so the contest-pitch tab matches Others.
                     SupportAxis.JUDGES -> CleanTabContent(
                         axis = SupportAxis.JUDGES,
                         state = judgesState,
                         onGenerate = { viewModel.generateJudges() },
+                        inlinePrompt = judgesInlinePrompt,
                     )
                 }
             }

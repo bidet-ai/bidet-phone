@@ -11,8 +11,9 @@
 package com.google.ai.edge.gallery.bidet.transcription
 
 import android.content.Context
-import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.bidet.llm.BidetSharedLiteRtEngineProvider
+// v24 (2026-05-14): the BuildConfig flavor gate at the factory layer was removed
+// (Moonshine is now the only STT engine returned by [create]).
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -87,26 +88,54 @@ interface TranscriptionEngine {
 
     companion object {
         /**
-         * Construct the engine for the current product flavor. Reads
-         * [BuildConfig.USE_GEMMA_AUDIO] to pick.
+         * Construct the STT engine. v24 (2026-05-14): pinned to [MoonshineEngine] on BOTH
+         * product flavors. The legacy [BuildConfig.USE_GEMMA_AUDIO] gate is preserved at
+         * the buildConfig layer (still consumed by [TranscriptionEngine.SharedEngineEntryPoint]
+         * + downstream UI for "is this the gemma cleaning flavor" decisions) but the live
+         * transcription path always goes through Moonshine.
          *
-         * F3.2 (2026-05-09): the gemma flavor reaches into Hilt for the shared
-         * [BidetSharedLiteRtEngineProvider] via an EntryPoint rather than `@Inject`-ing
-         * directly into [GemmaAudioEngine] from this static factory. Tests for
-         * [com.google.ai.edge.gallery.bidet.service.RecordingService] swap in their own
-         * `engineFactory` (see the property of that name on `RecordingService`); they're
-         * free to construct a fake engine without touching Hilt at all.
+         * Why the pivot:
+         *  v23 testing surfaced a memory-resource race during recording on the gemma flavor.
+         *  Both the LiteRT-LM Gemma audio engine (~2.4 GB resident on E2B) and the per-chunk
+         *  [ChunkCleaner] (which serial-acquires the same shared engine) were live during
+         *  recording. Real-time STT lost the race: chunk 0 transcribed, chunks 1+ failed
+         *  silently because the engine mutex was held by a cleaner run. The user saw "3-min
+         *  brain dump → first chunk only".
+         *
+         *  Fix: Moonshine is a ~70 MB sherpa-onnx CPU recognizer that initializes in well
+         *  under a second on Pixel 8 Pro and transcribes a 30-sec chunk in 100-300 ms.
+         *  Mark's verbatim approval (2026-05-14): "moonshine had done his thing as quickly
+         *  as possible. And then ... the Gemma, the one that's taken a few minutes to get
+         *  its work done. That's OK." Gemma is now ONLY the cleaning/analysis/judges LLM,
+         *  loaded LAZILY on first generate-tap after Stop.
+         *
+         *  Moonshine assets ship in BOTH flavor APKs already (see build.gradle.kts
+         *  `fetchMoonshineModel` task — bundled regardless of flavor, ~44 MB asset
+         *  overhead on the gemma flavor which was previously dead weight).
+         *
+         * The Hilt EntryPoint for the shared LiteRT-LM provider is no longer needed by
+         * this factory but stays in place for [LiteRtBidetGemmaClient] (cleaning path) and
+         * any future code that wants to reach for it from a non-Hilt site.
          */
-        fun create(context: Context): TranscriptionEngine =
-            if (BuildConfig.USE_GEMMA_AUDIO) {
-                val provider = EntryPointAccessors.fromApplication(
-                    context.applicationContext,
-                    SharedEngineEntryPoint::class.java,
-                ).sharedEngineProvider()
-                GemmaAudioEngine(context.applicationContext, provider)
-            } else {
-                MoonshineEngine(context)
-            }
+        fun create(context: Context): TranscriptionEngine = MoonshineEngine(context)
+
+        /**
+         * v24 (2026-05-14): retained for callers that previously needed Gemma audio mode
+         * (none in production after the STT-first pivot). Tests can still drive the
+         * GemmaAudioEngine via this factory to verify the legacy code path stays
+         * exercise-able; the production [create] no longer returns it.
+         *
+         * If a future v25 wants an opt-in "Gemma single-model STT" toggle, this is the
+         * factory to wire — surface a setting + call this in place of [create].
+         */
+        @Suppress("unused")
+        fun createGemmaAudio(context: Context): TranscriptionEngine {
+            val provider = EntryPointAccessors.fromApplication(
+                context.applicationContext,
+                SharedEngineEntryPoint::class.java,
+            ).sharedEngineProvider()
+            return GemmaAudioEngine(context.applicationContext, provider)
+        }
     }
 
     /**

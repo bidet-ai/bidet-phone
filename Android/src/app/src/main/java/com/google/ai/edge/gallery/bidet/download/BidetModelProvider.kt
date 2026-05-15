@@ -60,7 +60,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
- * State of the Gemma 4 E4B model download. Surfaced to [GemmaDownloadScreen].
+ * State of the Gemma 4 E2B model download. Surfaced to [GemmaDownloadScreen].
  */
 sealed class DownloadProgress {
     /** No download has been kicked off yet — the screen first lands here. */
@@ -86,11 +86,11 @@ sealed class DownloadProgress {
 
 /**
  * Indirection so [com.google.ai.edge.gallery.bidet.ui.LiteRtBidetGemmaClient] can ask
- * "is the Gemma 4 E4B model present and ready to load?" without coupling to upstream
+ * "is the Gemma 4 E2B model present and ready to load?" without coupling to upstream
  * Gallery's model-manager view-model.
  *
  * Phase 3 wiring (this PR): real implementation backed by [DownloadWorker] + a fixed
- * HuggingFace URL for `litert-community/gemma-4-E4B-it-litert-lm`. The provider
+ * HuggingFace URL for `litert-community/gemma-4-E2B-it-litert-lm`. The provider
  * owns the download lifecycle and reports progress as a [StateFlow]<[DownloadProgress]>.
  */
 interface BidetModelProvider {
@@ -146,7 +146,7 @@ interface BidetModelProvider {
  * back-off on transient I/O failure).
  *
  * URL + storage layout (per brief §8):
- *  - URL:   https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm
+ *  - URL:   https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
  *  - Path:  ${context.getExternalFilesDir(null)}/${MODEL_DIR}/${VERSION}/${FILE_NAME}
  *           where MODEL_DIR/VERSION/FILE_NAME match what [DownloadWorker] expects so the
  *           upstream worker drops the file in the right place.
@@ -375,11 +375,16 @@ class BidetModelProviderImpl @Inject constructor(
     companion object {
         private const val TAG = "BidetModelProvider"
 
-        // The HuggingFace URL is verified ungated 2026-05-07 (302 redirect to CDN, no auth).
-        const val MODEL_NAME: String = "gemma-4-E4B-it-litert-lm"
+        // E2B for Pixel 8 Pro / Tensor G3 memory budget, per project memory rule
+        // `reference_litertlm_tensor_g3_lessons_2026-05-09.md` — "E2B not E4B on Pixel 8".
+        // v22 shipped E4B (3.66 GB) and OOM-crash-looped on Mark's device; v23 switches to
+        // the E2B variant (~2.41 GB Content-Length). Same publisher, same LiteRT-LM runtime,
+        // same prompt template — only the weights change.
+        // The HuggingFace URL is verified ungated 2026-05-14 (302 redirect to CDN, no auth).
+        const val MODEL_NAME: String = "gemma-4-E2B-it-litert-lm"
         const val MODEL_URL: String =
-            "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm"
-        const val FILE_NAME: String = "gemma-4-E4B-it.litertlm"
+            "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+        const val FILE_NAME: String = "gemma-4-E2B-it.litertlm"
 
         // Layout matches DownloadWorker: ${externalFilesDir}/$MODEL_DIR/$VERSION/$FILE_NAME.
         // Picked stable strings (NOT the upstream `normalizedName` of a Model object so we
@@ -388,24 +393,29 @@ class BidetModelProviderImpl @Inject constructor(
         const val VERSION: String = "v1"
 
         /**
-         * Fallback used when [fetchExpectedTotalBytes] cannot resolve a Content-Length. 3.66 GB
-         * per HuggingFace metadata 2026-05-07. Phase 4A renamed from EXPECTED_TOTAL_BYTES to
+         * Fallback used when [fetchExpectedTotalBytes] cannot resolve a Content-Length.
+         * ~2.41 GB per HuggingFace metadata 2026-05-14 for the E2B variant
+         * (`gemma-4-E2B-it.litertlm`). Phase 4A renamed from EXPECTED_TOTAL_BYTES to
          * make the fallback role explicit.
+         *
+         * v23 (2026-05-14): switched from E4B (was 3_927_823_312L) to E2B per the Pixel 8 Pro
+         * memory-budget rule. Verified via `curl -sI -L` against the LFS-resolved S3 URL.
          */
-        const val EXPECTED_TOTAL_BYTES_FALLBACK: Long = 3_927_823_312L
+        const val EXPECTED_TOTAL_BYTES_FALLBACK: Long = 2_588_147_712L
 
         /**
-         * Task #36 (2026-05-10): canonical on-disk size of the gemma-4-E4B-it.litertlm file.
+         * Task #36 (2026-05-10): canonical on-disk size of the gemma-4-E2B-it.litertlm file.
          * Used by [BidetModelProviderImpl.isModelReady] to distinguish a complete download
-         * from a partial. Verified on 2026-05-10 against a fresh sideload on Pixel 8 Pro.
+         * from a partial.
          *
-         * Keep this distinct from [EXPECTED_TOTAL_BYTES_FALLBACK]: that constant feeds the
-         * download progress bar denominator and reflects the HuggingFace `Content-Length`
-         * header (which includes a few-byte signature trailer), whereas this constant is the
-         * exact byte count `du -b` reports on the rename target. The two values are close
-         * but not identical — keeping them split avoids drift on either side.
+         * v23 (2026-05-14): switched from E4B (was 3_659_530_240L) to E2B per the Pixel 8 Pro
+         * memory-budget rule. Set to the same HuggingFace Content-Length value as
+         * [EXPECTED_TOTAL_BYTES_FALLBACK] until we measure the on-disk `du -b` value against
+         * a fresh sideload. The [MODEL_SIZE_TOLERANCE] of 0.99 absorbs the ~few-byte
+         * signature trailer delta (≈25 MB headroom at 2.5 GB), which historically tracked
+         * the same direction for E4B.
          */
-        const val EXPECTED_MODEL_SIZE_BYTES: Long = 3_659_530_240L
+        const val EXPECTED_MODEL_SIZE_BYTES: Long = 2_588_147_712L
 
         /**
          * Task #36: tolerance applied to [EXPECTED_MODEL_SIZE_BYTES] when judging readiness.

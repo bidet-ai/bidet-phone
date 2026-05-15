@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -218,7 +219,12 @@ fun SessionDetailScreen(
             }
 
             // RAW reading base — always visible.
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // v25 (2026-05-14): INVERTED the split — RAW now gets weight(2f) and the
+            // Clean tab body below drops to weight(1f). Mark's v24 test feedback: the
+            // Clean pane dominated the screen but RAW is his primary read surface in
+            // history view too; Clean is glance-able when needed. ~67% / ~33% of
+            // remaining vertical space goes to RAW / Clean respectively.
+            Box(modifier = Modifier.fillMaxWidth().weight(2f)) {
                 RawTabContent(rawText = session.rawText, isRecording = false)
             }
 
@@ -232,6 +238,48 @@ fun SessionDetailScreen(
                 editingEnabled = true,
             )
 
+            // v22 (2026-05-13): inline expressive-prompt editor state — same wiring as
+            // BidetTabsScreen so a user editing the prompt in history-view sees the
+            // same affordance they'd see during a live recording.
+            //
+            // v25 Fix 3 (2026-05-14): JUDGES also gets the inline editor + Generate
+            // button block in history view, matching the live recorder.
+            val expressiveDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.EXPRESSIVE)
+            }
+            val expressivePref = tabPrefs.firstOrNull { it.axis == SupportAxis.EXPRESSIVE }
+            val expressivePromptText = expressivePref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: expressiveDefault
+            val expressiveInlinePrompt = InlinePromptState(
+                currentPrompt = expressivePromptText,
+                defaultPrompt = expressiveDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = expressivePref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.EXPRESSIVE)
+                    viewModel.saveTabPref(TabPref(SupportAxis.EXPRESSIVE, label, newPrompt))
+                },
+            )
+
+            val judgesDefault by produceState(initialValue = "") {
+                value = viewModel.defaultPromptFor(SupportAxis.JUDGES)
+            }
+            val judgesPref = tabPrefs.firstOrNull { it.axis == SupportAxis.JUDGES }
+            val judgesPromptText = judgesPref?.promptTemplate
+                ?.takeIf { it.isNotBlank() }
+                ?: judgesDefault
+            val judgesInlinePrompt = InlinePromptState(
+                currentPrompt = judgesPromptText,
+                defaultPrompt = judgesDefault,
+                onSavePrompt = { newPrompt ->
+                    val label = judgesPref?.label
+                        ?: TabPref.defaultLabel(SupportAxis.JUDGES)
+                    viewModel.saveTabPref(TabPref(SupportAxis.JUDGES, label, newPrompt))
+                },
+            )
+
+            // v25 (2026-05-14): dropped Clean tab body weight to 1f to invert the
+            // RAW/Clean split — see RAW Box comment above.
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 when (activeAxis) {
                     SupportAxis.RECEPTIVE -> CleanTabContent(
@@ -243,12 +291,17 @@ fun SessionDetailScreen(
                         axis = SupportAxis.EXPRESSIVE,
                         state = expressiveState,
                         onGenerate = { viewModel.generate(SupportAxis.EXPRESSIVE) },
+                        // v22 (2026-05-13): inline prompt editor on the EXPRESSIVE tab.
+                        inlinePrompt = expressiveInlinePrompt,
                     )
                     // v20 (2026-05-11): Clean-for-judges contest-pitch tab.
+                    // v25 Fix 3 (2026-05-14): inline prompt editor + explicit
+                    // Generate button so the contest-pitch tab matches Others.
                     SupportAxis.JUDGES -> CleanTabContent(
                         axis = SupportAxis.JUDGES,
                         state = judgesState,
                         onGenerate = { viewModel.generate(SupportAxis.JUDGES) },
+                        inlinePrompt = judgesInlinePrompt,
                     )
                 }
             }
@@ -412,6 +465,15 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * v22 (2026-05-13): public bridge to the bundled default for an axis. Used by the
+     * inline prompt editor on the EXPRESSIVE tab so its "Reset to default" affordance
+     * reads the same asset the bottom-sheet editor uses.
+     */
+    suspend fun defaultPromptFor(axis: SupportAxis): String = withContext(Dispatchers.IO) {
+        context.assets.open(TabPref.defaultPromptAssetPath(axis)).bufferedReader().use { it.readText() }
+    }
+
     fun selectAxis(axis: SupportAxis) {
         _activeAxis.value = axis
     }
@@ -538,6 +600,8 @@ class SessionDetailViewModel @Inject constructor(
                     partialText = state.partialText,
                     tokenCount = state.tokenCount,
                     tokenCap = state.tokenCap,
+                    // v25 (2026-05-14): forward chunkLabel for the sticky banner.
+                    chunkLabel = state.chunkLabel,
                 )
             }
             is CleanGenerationService.GenerationState.Done -> {
