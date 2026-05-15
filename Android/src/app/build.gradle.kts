@@ -168,6 +168,11 @@ android {
   // "this is a JVM unit test and we don't care about Android-specific behaviour".
   testOptions {
     unitTests.isReturnDefaultValues = true
+    // v26 (2026-05-14): Robolectric + Compose UI tests need merged Android
+    // resources on the unit-test classpath so stringResource() (e.g.
+    // R.string.bidet_generate_button) resolves under `./gradlew :app:test`.
+    // This is purely for the Clean-tab visibility guard — no runtime impact.
+    unitTests.isIncludeAndroidResources = true
   }
 }
 
@@ -248,6 +253,15 @@ dependencies {
   // throws "Method not mocked" RuntimeException in JVM unit-test runtime;
   // DedupAlgorithmTest fixtures parse JSON, so we need the real artifact.
   testImplementation("org.json:json:20240303")
+  // v26 (2026-05-14): Robolectric + Compose ui-test-junit4 on the UNIT-test
+  // classpath so the Clean-tab Generate-button visibility guard runs with
+  // `./gradlew :app:test` (no device). v22→v25 shipped UI without this gate;
+  // the whole point of v26 is that the regression is now caught here first.
+  testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.junit)
+  testImplementation(platform(libs.androidx.compose.bom))
+  testImplementation(libs.androidx.ui.test.junit4)
+  testImplementation(libs.androidx.ui.test.manifest)
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.espresso.core)
   androidTestImplementation(platform(libs.androidx.compose.bom))

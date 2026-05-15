@@ -21,10 +21,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -53,9 +51,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.bidet.a11y.A11yPreferences
+import com.google.ai.edge.gallery.ui.theme.GalleryTheme
 import com.google.ai.edge.gallery.ui.theme.cleanTabBodyStyle
 
 /**
@@ -97,30 +97,87 @@ fun CleanTabContent(
     }
     Column(modifier = Modifier.fillMaxSize()) {
         if (inlinePrompt != null) {
-            // v25 (2026-05-14): when the inline prompt editor is shown (EXPRESSIVE +
-            // JUDGES axes), pass the live [TabState] and [onGenerate] callback so the
-            // editor can render an explicit, prominent "Generate" button DIRECTLY
-            // below the prompt block whenever the tab is in Idle / Failed state.
-            // Fix 3 — Mark via UI dump: previously the Idle-state Generate button
-            // lived only inside the CleanTabBody scroller below the editor; on a
-            // Pixel 8 Pro at the new RAW 2f / Clean 1f vertical split the editor
-            // pushed it off-screen. User saw "Prompt + Edit" and nothing else.
-            // Mark's preference: explicit user control on Others / Judges since
-            // those have the custom prompt — keep auto-trigger off, give the
-            // tappable button a permanent home next to the prompt the user just read.
-            InlinePromptEditor(
-                state = inlinePrompt,
-                tabState = state,
-                generateLabel = stringResource(R.string.bidet_generate_button),
-                onGenerate = onGenerate,
-            )
+            // EXPRESSIVE + JUDGES axes show the inline prompt editor above the
+            // output. It is purely the prompt editor now — it does NOT own the
+            // Generate button (see v26 root-cause note on CleanTabActionButton).
+            InlinePromptEditor(state = inlinePrompt)
         }
-        CleanTabBody(
+        // v26 (2026-05-14): the Generate / Regenerate / Retry button now lives
+        // HERE — a fixed, non-scrolling slot in CleanTabContent's top-level
+        // Column, OUTSIDE both the collapsible InlinePromptEditor body and the
+        // scrolling CleanTabBody.
+        //
+        // v25 root cause (regression Mark rolled back): v25 fix3 moved the
+        // Idle-state button INTO InlinePromptEditor's Column, appended after the
+        // prompt block. With v25's RAW 2f / Clean 1f weight split the Clean Box
+        // is ~33% of the remaining height; the parent Column does not scroll, so
+        // the editor's prompt header/preview consumed the Box and the appended
+        // button was clipped off the bottom (EXPRESSIVE/JUDGES). RECEPTIVE has
+        // no inlinePrompt so its only button was the one buried inside the
+        // verticalScroll'd CleanTabBody — pushed below the fold in the tiny
+        // pane and never discovered. Net: no tab reliably showed Generate.
+        //
+        // Fix: render the action button in its own intrinsic-height row at the
+        // top of the Clean pane, before the scroll region, so it is ALWAYS
+        // visible in Idle/Failed/Cached regardless of pane size, scroll
+        // position, or whether the prompt editor is expanded.
+        CleanTabActionButton(
             state = state,
             generateLabel = stringResource(R.string.bidet_generate_button),
-            idleHint = stringResource(idleHintRes),
             onGenerate = onGenerate,
         )
+        CleanTabBody(
+            state = state,
+            idleHint = stringResource(idleHintRes),
+        )
+    }
+}
+
+/**
+ * v26 (2026-05-14): the always-visible Generate / Regenerate / Retry affordance.
+ *
+ * Rendered as a fixed-height slot in [CleanTabContent]'s top-level Column —
+ * NOT inside the collapsible [InlinePromptEditor] (which only draws its body
+ * when expanded and overflowed the weighted Box in v25) and NOT inside the
+ * [verticalScroll]'d [CleanTabBody] (where the button sat below the fold on a
+ * Pixel 8 Pro at the RAW 2f / Clean 1f split). This guarantees the button is
+ * on-screen and tappable the moment a tab is in Idle state, on all three axes.
+ *
+ * Visibility contract:
+ *  - Idle  → filled [Button] "Generate" (emphasis: this is the primary action)
+ *  - Failed → filled [Button] "Retry"
+ *  - Cached → [FilledTonalButton] "Regenerate" (lower emphasis; output present)
+ *  - Generating / Streaming → button hidden (sticky chunk banner shown in body)
+ */
+@Composable
+private fun CleanTabActionButton(
+    state: TabState,
+    generateLabel: String,
+    onGenerate: () -> Unit,
+) {
+    val isBusy = state is TabState.Streaming || state is TabState.Generating
+    if (isBusy) return
+    val (label, tonal) = when (state) {
+        is TabState.Cached -> "Regenerate" to true
+        is TabState.Failed -> "Retry" to false
+        else -> generateLabel to false
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        if (tonal) {
+            FilledTonalButton(
+                onClick = onGenerate,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(label) }
+        } else {
+            Button(
+                onClick = onGenerate,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(label) }
+        }
     }
 }
 
@@ -144,13 +201,6 @@ data class InlinePromptState(
 @Composable
 private fun InlinePromptEditor(
     state: InlinePromptState,
-    // v25 Fix 3 (2026-05-14): live tab state + generate trigger so the editor block
-    // can render an explicit Generate button below the prompt body. These default to
-    // null/no-op for any future caller that only wants the prompt editor without the
-    // generate affordance, but the live recorder + history screens now pass them.
-    tabState: TabState? = null,
-    generateLabel: String = "Generate",
-    onGenerate: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // rememberSaveable keys on currentPrompt so a save-from-elsewhere updates the field;
@@ -233,35 +283,6 @@ private fun InlinePromptEditor(
                 ) { Text("Reset to default") }
             }
         }
-
-        // v25 Fix 3 (2026-05-14): explicit Generate / Regenerate affordance pinned
-        // directly under the prompt block. Mark's UI-dump report: on Others / Judges
-        // the editor was visible but the Idle-state Generate button buried inside the
-        // CleanTabBody scroller was either clipped at the new RAW 2f / Clean 1f
-        // vertical split, or invisible after the user expanded the editor. Pinning
-        // it here means user reads the prompt → taps Generate → inference fires. No
-        // auto-trigger (matches Mark's "explicit control" preference for the
-        // custom-prompt tabs). Button is hidden during in-flight inference to
-        // prevent double-tap restarts.
-        val isBusy = tabState is TabState.Streaming || tabState is TabState.Generating
-        if (tabState != null && !isBusy) {
-            val (label, tonal) = when (tabState) {
-                is TabState.Cached -> "Regenerate" to true
-                is TabState.Failed -> "Retry" to false
-                else -> generateLabel to false
-            }
-            if (tonal) {
-                FilledTonalButton(
-                    onClick = onGenerate,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(label) }
-            } else {
-                Button(
-                    onClick = onGenerate,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(label) }
-            }
-        }
     }
 }
 
@@ -269,9 +290,7 @@ private fun InlinePromptEditor(
 @Composable
 private fun CleanTabBody(
     state: TabState,
-    generateLabel: String,
     idleHint: String,
-    onGenerate: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -302,12 +321,13 @@ private fun CleanTabBody(
         when (state) {
             is TabState.Idle -> {
                 // v24 (2026-05-14): explicit bodyLarge so the idle hint is readable.
+                // v26 (2026-05-14): the Generate button is no longer here — it is
+                // rendered by [CleanTabActionButton] in the always-visible slot
+                // above this scroll region (see its KDoc for the v25 regression).
                 Text(
                     text = idleHint,
                     style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
                 )
-                Spacer(Modifier.height(4.dp))
-                Button(onClick = onGenerate) { Text(generateLabel) }
             }
             is TabState.Generating -> {
                 Text(
@@ -375,13 +395,13 @@ private fun CleanTabBody(
                         ),
                     style = cleanOutputStyle,
                 )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = onGenerate) { Text("Regenerate") }
+                // v26 (2026-05-14): "Regenerate" moved to [CleanTabActionButton]
+                // above the scroll region so it is reachable without scrolling
+                // past a long cached output.
             }
             is TabState.Failed -> {
                 Text("Error: ${state.message}")
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = onGenerate) { Text("Retry") }
+                // v26 (2026-05-14): "Retry" moved to [CleanTabActionButton] above.
             }
         }
     }
@@ -394,3 +414,87 @@ private fun Modifier.combinedClickableForCopy(text: String, onCopy: () -> Unit):
         onClick = { /* tap is no-op; long-press copies. RAW base has an explicit Copy button. */ },
         onLongClick = onCopy,
     )
+
+// ---------------------------------------------------------------------------
+// v26 (2026-05-14): @Preview composables — added BEFORE the visibility fix per
+// the v26 test-first workflow so the Clean-tab layout can be eyeballed in
+// Android Studio / rendered without an APK in each state. The Idle preview is
+// the one that matters: it must show a "Generate" button at the top of the
+// pane, NOT buried in the scroll body and NOT clipped inside the collapsible
+// prompt editor (the v25 regression). The same structure is asserted
+// programmatically by CleanTabGenerateButtonTest.
+//
+// JUDGES axis is used for the inline-prompt previews because EXPRESSIVE +
+// JUDGES are the two axes that render InlinePromptEditor — the exact pair
+// where v25 clipped the button. RECEPTIVE (no inlinePrompt) is covered by the
+// Idle preview to prove the button is out of the scroller there too.
+// ---------------------------------------------------------------------------
+
+private const val PREVIEW_PROMPT =
+    "Rewrite the speaker's brain dump as a clear, well-structured note. Keep " +
+        "every fact; fix grammar and ordering only."
+
+private fun previewInlinePrompt() = InlinePromptState(
+    currentPrompt = PREVIEW_PROMPT,
+    defaultPrompt = PREVIEW_PROMPT,
+    onSavePrompt = {},
+)
+
+@Preview(name = "Clean tab — Idle (RECEPTIVE, no inline prompt)", showBackground = true)
+@Composable
+private fun CleanTabIdlePreview() {
+    GalleryTheme {
+        CleanTabContent(
+            axis = SupportAxis.RECEPTIVE,
+            state = TabState.Idle,
+            onGenerate = {},
+        )
+    }
+}
+
+@Preview(name = "Clean tab — Idle (JUDGES, inline prompt collapsed)", showBackground = true)
+@Composable
+private fun CleanTabIdleWithPromptPreview() {
+    GalleryTheme {
+        CleanTabContent(
+            axis = SupportAxis.JUDGES,
+            state = TabState.Idle,
+            onGenerate = {},
+            inlinePrompt = previewInlinePrompt(),
+        )
+    }
+}
+
+@Preview(name = "Clean tab — Streaming (no button, chunk banner)", showBackground = true)
+@Composable
+private fun CleanTabStreamingPreview() {
+    GalleryTheme {
+        CleanTabContent(
+            axis = SupportAxis.EXPRESSIVE,
+            state = TabState.Streaming(
+                partialText = "The speaker opened with the quarterly numbers and then…",
+                tokenCount = 320,
+                tokenCap = 2048,
+                chunkLabel = "Cleaning part 1 of 2…",
+            ),
+            onGenerate = {},
+            inlinePrompt = previewInlinePrompt(),
+        )
+    }
+}
+
+@Preview(name = "Clean tab — Cached (Regenerate visible)", showBackground = true)
+@Composable
+private fun CleanTabCachedPreview() {
+    GalleryTheme {
+        CleanTabContent(
+            axis = SupportAxis.RECEPTIVE,
+            state = TabState.Cached(
+                text = "Quarterly recap:\n\n1. Revenue up 12% QoQ.\n2. Two hires " +
+                    "approved.\n3. Ship date holds for the 18th.",
+                generatedAt = 1_700_000_000_000L,
+            ),
+            onGenerate = {},
+        )
+    }
+}
